@@ -25,7 +25,7 @@ Required:
 Recommended, depending on your workflow:
 
 - OpenSSH
-- `guacd` for embedded RDP development fallback, or the bundled sidecar in packaged builds
+- Docker for the one-command local dev workflow, or a native `guacd` binary for manual embedded RDP development
 - FreeRDP on macOS or the native Remote Desktop client on Windows for external RDP fallback
 
 Development builds also require Rust.
@@ -48,7 +48,18 @@ Install dependencies and launch the desktop app:
 
 ```sh
 npm install
-npm run tauri:dev
+npm start
+```
+
+`npm start` starts the local Guacamole bridge with Docker, waits for it to be
+ready, launches Tauri dev mode, and stops the bridge when you quit. Docker
+Desktop must be running before you start the app.
+
+Advanced/manual alternatives:
+
+```sh
+npm run tauri:dev  # raw Tauri dev mode, no Docker or guacd lifecycle management
+npm run dev        # frontend-only Vite server
 ```
 
 Frontend checks:

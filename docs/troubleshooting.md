@@ -38,8 +38,17 @@ Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app shows
 "Embedded RDP is not ready" when it cannot find a `guacd` binary or connect to a
 bridge on `127.0.0.1:4822`.
 
+For the standard local workflow, start the app with:
+
+```sh
+npm start
+```
+
+That command requires Docker Desktop to be running. It starts the Guacamole
+container, launches Tauri dev mode, and stops the container when you quit.
+
 On macOS, Homebrew may not provide a `guacamole-server` formula. For development,
-run the official `guacd` container instead:
+you can also run the official `guacd` container manually:
 
 ```sh
 docker run --rm --name ssm-commander-guacd \
@@ -61,6 +70,17 @@ guacd -f -b 127.0.0.1 -l 4822
 ```
 
 Packaged builds can use a bundled guacd sidecar. RDP credentials entered in Console are kept in memory only.
+
+## Raw Tauri Dev Mode
+
+Use raw Tauri dev mode when you want to manage Docker or native `guacd`
+yourself:
+
+```sh
+npm run tauri:dev
+```
+
+This does not start or stop the Guacamole container.
 
 ## Tunnels Keep Running
 

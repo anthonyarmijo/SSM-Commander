@@ -12,7 +12,7 @@ Required:
 
 Recommended:
 
-- Docker, or a native `guacd` binary, for embedded RDP console tabs during development
+- Docker for `npm start`, or a native `guacd` binary for manual embedded RDP console tabs during development
 - FreeRDP for external RDP fallback
 
 Example Homebrew installs:
@@ -23,11 +23,21 @@ brew install --cask session-manager-plugin
 brew install freerdp
 ```
 
-Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app expects
-`guacd` to be reachable on `127.0.0.1:4822`; packaged builds can also use a
-bundled sidecar when one is available. Homebrew may not provide a
-`guacamole-server` formula on macOS, so the recommended development fallback is
-to run the official `guacd` container:
+Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The standard
+development command manages this for you:
+
+```sh
+npm start
+```
+
+`npm start` requires Docker Desktop to be running. It starts the official
+`guacd` container on `127.0.0.1:4822`, launches Tauri dev mode, and stops the
+container when you quit.
+
+For manual development, the app expects `guacd` to be reachable on
+`127.0.0.1:4822`; packaged builds can also use a bundled sidecar when one is
+available. Homebrew may not provide a `guacamole-server` formula on macOS, so
+the recommended manual fallback is to run the official `guacd` container:
 
 ```sh
 docker run --rm --name ssm-commander-guacd \
