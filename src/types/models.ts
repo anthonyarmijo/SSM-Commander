@@ -4,7 +4,7 @@ export type AuthStatus = "unknown" | "valid" | "expired" | "error";
 export type SsmStatus = "unknown" | "ready" | "notManaged" | "offline" | "accessDenied" | "error";
 export type SessionKind = "shell" | "tunnel" | "rdp" | "ssh";
 export type SessionStatus = "starting" | "active" | "stopping" | "stopped" | "failed";
-export type ConsoleSessionKind = "ssh" | "rdp";
+export type ConsoleSessionKind = "shell" | "ssh" | "rdp";
 export type ConsoleRenderer = "xterm" | "guacamole";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type DiagnosticArea = "dependency" | "aws" | "process" | "launcher" | "security";
@@ -13,16 +13,6 @@ export type InstancePowerAction = "start" | "stop";
 export type CapabilityStatus = "unknown" | "checking" | "available" | "unavailable";
 export type ProfileCapabilityId = "auth" | "regions" | "ec2" | "ssm";
 export type SsoLoginAttemptStatus = "starting" | "waiting" | "succeeded" | "failed";
-export type TerminalPreset =
-  | "systemDefault"
-  | "terminal"
-  | "iterm"
-  | "ghostty"
-  | "warp"
-  | "wezterm"
-  | "windowsTerminal"
-  | "powerShell";
-
 export interface DependencyCheck {
   name: string;
   command: string;
@@ -185,8 +175,6 @@ export interface UserPreferences {
   activeProfile?: string | null;
   defaultSshUser?: string | null;
   sshKeyPath?: string | null;
-  preferredTerminalPreset?: TerminalPreset | null;
-  customTerminalCommand?: string | null;
   preferredRdpClient?: string | null;
   themeMode?: ThemeMode | null;
   sidebarWidth?: number | null;
@@ -198,8 +186,6 @@ export interface ConnectRequest {
   profile: string;
   region: string;
   instanceId: string;
-  terminalPreset?: TerminalPreset | null;
-  customTerminalCommand?: string | null;
 }
 
 export interface PortForwardRequest extends ConnectRequest {

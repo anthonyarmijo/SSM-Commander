@@ -262,6 +262,7 @@ pub enum SessionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConsoleSessionKind {
+    Shell,
     Ssh,
     Rdp,
 }

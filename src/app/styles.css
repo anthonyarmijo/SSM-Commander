@@ -552,6 +552,8 @@ code {
   position: relative;
   align-content: start;
   min-height: 208px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .profile-card__header {
@@ -559,7 +561,12 @@ code {
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  min-width: 0;
   padding-right: 28px;
+}
+
+.profile-card__header > div:first-child {
+  min-width: 0;
 }
 
 .profile-card__header h3,
@@ -567,6 +574,11 @@ code {
 .empty-home-state h3 {
   margin: 0 0 4px;
   font-size: 16px;
+}
+
+.profile-card__header h3 {
+  line-height: 1.22;
+  overflow-wrap: anywhere;
 }
 
 .profile-card__header p,
@@ -586,18 +598,27 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .profile-card__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.profile-card__actions button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .profile-card__overview {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .profile-card__overview-item {
@@ -608,6 +629,8 @@ code {
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 6px 9px;
 }
 
@@ -764,6 +787,7 @@ code {
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  min-width: 0;
 }
 
 .profile-capability__heading span,
@@ -778,6 +802,11 @@ code {
   align-items: center;
   display: inline-flex;
   gap: 8px;
+  min-width: 0;
+}
+
+.profile-capability__title span:last-child {
+  overflow-wrap: anywhere;
 }
 
 .profile-capability__indicator {
@@ -808,6 +837,7 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .profile-capability__chip {
@@ -817,6 +847,8 @@ code {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 5px 8px;
 }
 
@@ -826,6 +858,7 @@ code {
 
 .profile-capability p {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .field-group {
@@ -994,8 +1027,7 @@ code {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .validation-state--empty {
@@ -1719,6 +1751,23 @@ tr.selected--primary td {
   gap: 8px;
 }
 
+.connection-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.connection-actions__buttons {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.resource-offline {
+  color: var(--bad);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0;
+}
+
 .action-stack--inline {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -2034,7 +2083,7 @@ tr.selected--primary td {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 3px;
 }
 
@@ -2042,6 +2091,10 @@ tr.selected--primary td {
   background: transparent;
   border: 0;
   border-radius: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-inline: 8px;
+  white-space: normal;
 }
 
 .segmented-control button.active {
@@ -2121,6 +2174,21 @@ tr.selected--primary td {
   position: relative;
 }
 
+.tooltip::after {
+  content: "";
+  display: none;
+  height: 10px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 100%;
+}
+
+.tooltip:hover::after,
+.tooltip:focus-within::after {
+  display: block;
+}
+
 .tooltip__trigger {
   align-items: center;
   background: var(--surface);
@@ -2156,7 +2224,7 @@ tr.selected--primary td {
   padding: 10px 12px;
   pointer-events: none;
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   transform: translateY(-4px);
   transition: opacity 120ms ease, transform 120ms ease;
   z-index: 12;

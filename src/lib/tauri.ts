@@ -232,8 +232,6 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
           lastRegion: "us-west-2",
           defaultSshUser: "ec2-user",
           sshKeyPath: null,
-          preferredTerminalPreset: "systemDefault",
-          customTerminalCommand: null,
           preferredRdpClient: null,
           themeMode: "light",
           sidebarWidth: 286,
@@ -334,7 +332,7 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
 
   if (command === "start_console_session") {
     const request = args?.request as Record<string, unknown> | undefined;
-    const kind = request?.kind === "rdp" ? "rdp" : "ssh";
+    const kind = request?.kind === "rdp" || request?.kind === "ssh" || request?.kind === "shell" ? request.kind : "shell";
     const instanceId = typeof request?.instanceId === "string" ? request.instanceId : "demo-node-alpha";
     return {
       id: `preview-console-${kind}-${Date.now()}`,
@@ -345,11 +343,16 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
       instanceId,
       startedAt: new Date().toISOString(),
       status: kind === "rdp" ? "failed" : "active",
-      title: `${kind.toUpperCase()} ${instanceId}`,
-      tunnel: kind === "rdp" ? previewSessions[1].tunnel : previewSessions[0].tunnel,
+      title: kind === "shell" ? `SSM ${instanceId}` : `${kind.toUpperCase()} ${instanceId}`,
+      tunnel: kind === "shell" ? null : kind === "rdp" ? previewSessions[1].tunnel : previewSessions[0].tunnel,
       bridgeUrl: null,
       connectionToken: null,
-      message: kind === "rdp" ? "Preview RDP requires the desktop backend bridge." : "Preview SSH console",
+      message:
+        kind === "rdp"
+          ? "Preview RDP requires the desktop backend bridge."
+          : kind === "shell"
+            ? "Preview SSM shell"
+            : "Preview SSH console",
     } as T;
   }
 

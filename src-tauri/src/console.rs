@@ -338,6 +338,101 @@ pub fn ssh_console_session(
     })
 }
 
+pub fn shell_console_session(
+    app: AppHandle,
+    request: &ConsoleSessionRequest,
+) -> Result<ManagedConsoleSession, String> {
+    let id = Uuid::new_v4().to_string();
+    let rows = request.terminal_rows.unwrap_or(28).max(1);
+    let cols = request.terminal_cols.unwrap_or(100).max(1);
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| format!("Could not open embedded terminal: {error}"))?;
+
+    let mut command = CommandBuilder::new("aws");
+    for arg in ssm_shell_command_args(&request.profile, &request.region, &request.instance_id) {
+        command.arg(arg);
+    }
+
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("Could not start embedded SSM shell: {error}"))?;
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| format!("Could not read embedded SSM shell output: {error}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|error| format!("Could not write embedded SSM shell input: {error}"))?;
+    drop(pair.slave);
+
+    let event_session_id = id.clone();
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let data = String::from_utf8_lossy(&buffer[..read]).to_string();
+                    let _ = app.emit(
+                        CONSOLE_OUTPUT_EVENT,
+                        ConsoleOutputEvent {
+                            session_id: event_session_id.clone(),
+                            data,
+                        },
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let record = ConsoleSessionRecord {
+        id,
+        kind: ConsoleSessionKind::Shell,
+        renderer: ConsoleRenderer::Xterm,
+        profile: request.profile.clone(),
+        region: request.region.clone(),
+        instance_id: request.instance_id.clone(),
+        started_at: Utc::now().to_rfc3339(),
+        status: SessionStatus::Active,
+        title: format!("SSM {}", request.instance_id),
+        tunnel: None,
+        bridge_url: None,
+        connection_token: None,
+        message: None,
+    };
+
+    Ok(ManagedConsoleSession {
+        record,
+        tunnel_session_id: None,
+        pty_child: Some(child),
+        pty_master: Some(pair.master),
+        pty_writer: Some(writer),
+    })
+}
+
+fn ssm_shell_command_args(profile: &str, region: &str, instance_id: &str) -> Vec<String> {
+    vec![
+        "ssm".to_string(),
+        "start-session".to_string(),
+        "--target".to_string(),
+        instance_id.to_string(),
+        "--profile".to_string(),
+        profile.to_string(),
+        "--region".to_string(),
+        region.to_string(),
+    ]
+}
+
 pub fn rdp_console_session(
     request: &ConsoleSessionRequest,
     tunnel_record: SessionRecord,

@@ -70,7 +70,6 @@ import type {
   ProfileCapabilityReport,
   SessionRecord,
   SsoLoginAttempt,
-  TerminalPreset,
   ThemeMode,
   UserPreferences,
 } from "../types/models";
@@ -87,27 +86,12 @@ const SAVED_PROFILE_WORKSPACE_HELP =
   "The active profile powers instance discovery, power actions, and console sessions. Keep additional profiles pinned here so you can switch into them quickly when needed.";
 type ResolvedTheme = "light" | "dark";
 type ProfileStateMap = Record<string, SavedProfileState>;
-type TerminalOption = { value: TerminalPreset; label: string };
 type InstanceContextMenuState = { instanceId: string; x: number; y: number } | null;
-
-const macTerminalOptions: TerminalOption[] = [
-  { value: "systemDefault", label: "System default" },
-  { value: "terminal", label: "Terminal" },
-  { value: "iterm", label: "iTerm" },
-  { value: "ghostty", label: "Ghostty" },
-  { value: "warp", label: "Warp" },
-  { value: "wezterm", label: "WezTerm" },
-];
-
-const windowsTerminalOptions: TerminalOption[] = [
-  { value: "systemDefault", label: "System default" },
-  { value: "windowsTerminal", label: "Windows Terminal" },
-  { value: "powerShell", label: "PowerShell" },
-];
-
-const supportedTerminalPresets = new Set<TerminalPreset>(
-  [...macTerminalOptions, ...windowsTerminalOptions].map((option) => option.value),
-);
+const technicalInputProps = {
+  autoCapitalize: "none",
+  autoCorrect: "off",
+  spellCheck: false,
+} as const;
 
 function buildAwsContextKey(profile: string, region: string): string {
   if (!profile || !region) return "";
@@ -328,19 +312,21 @@ function HelpTooltip({
   );
 }
 
-function getTerminalOptions(platform: string | undefined): TerminalOption[] {
-  return platform === "windows" ? windowsTerminalOptions : macTerminalOptions;
-}
-
-function normalizeTerminalPreset(preset: TerminalPreset | null | undefined): TerminalPreset {
-  return preset && supportedTerminalPresets.has(preset) ? preset : "systemDefault";
-}
-
 function capabilityIndicatorTitle(status: CapabilityStatus): string {
   if (status === "available") return "Available";
   if (status === "unavailable") return "Unavailable";
   if (status === "checking") return "Checking";
   return "Not checked";
+}
+
+function consoleKindLabel(kind: ConsoleSessionKind): string {
+  if (kind === "shell") return "Direct SSM (Shell)";
+  return kind.toUpperCase();
+}
+
+function consoleOpenLabel(kind: ConsoleSessionKind): string {
+  if (kind === "shell") return "Open SSM Shell";
+  return `Open ${kind.toUpperCase()}`;
 }
 
 function isLoadedInstancesNotice(message: string): boolean {
@@ -365,7 +351,8 @@ export function App() {
   const [consoleSessions, setConsoleSessions] = useState<ConsoleSessionRecord[]>([]);
   const [activeConsoleSessionId, setActiveConsoleSessionId] = useState("");
   const [isConsoleDialogOpen, setIsConsoleDialogOpen] = useState(false);
-  const [consoleSessionKind, setConsoleSessionKind] = useState<ConsoleSessionKind>("ssh");
+  const [consoleSessionKind, setConsoleSessionKind] = useState<ConsoleSessionKind>("shell");
+  const [instanceConnectionKind, setInstanceConnectionKind] = useState<ConsoleSessionKind>("shell");
   const [consoleInstanceId, setConsoleInstanceId] = useState("");
   const [rdpUsername, setRdpUsername] = useState("");
   const [rdpPassword, setRdpPassword] = useState("");
@@ -373,7 +360,6 @@ export function App() {
   const [query, setQuery] = useState("");
   const [sshUser, setSshUser] = useState("ec2-user");
   const [sshKeyPath, setSshKeyPath] = useState("");
-  const [preferredTerminalPreset, setPreferredTerminalPreset] = useState<TerminalPreset>("systemDefault");
   const [customLocalPort, setCustomLocalPort] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isPowerActionBusy, setIsPowerActionBusy] = useState(false);
@@ -409,6 +395,10 @@ export function App() {
   const selectedInstanceIdSet = useMemo(() => new Set(selectedInstanceIds), [selectedInstanceIds]);
   const filteredInstances = useMemo(() => filterInstances(instances, query), [instances, query]);
   const visibleInstances = useMemo(() => sortInstances(filteredInstances, instanceSort), [filteredInstances, instanceSort]);
+  const runningInstances = useMemo(
+    () => instances.filter((instance) => instance.state === "running"),
+    [instances],
+  );
   const visibleInstanceTableColumns = useMemo(
     () => buildInstanceTableLayout(instanceTableVisibleColumns, instanceTableColumnWidths),
     [instanceTableColumnWidths, instanceTableVisibleColumns],
@@ -420,6 +410,9 @@ export function App() {
   );
   const contextMenuInstance = instanceContextMenu
     ? instances.find((instance) => instance.instanceId === instanceContextMenu.instanceId) ?? null
+    : null;
+  const consoleTargetInstance = consoleInstanceId
+    ? instances.find((instance) => instance.instanceId === consoleInstanceId.trim()) ?? null
     : null;
   const showInstancesRefreshing = isInstancesLoading && instances.length > 0;
   const showInitialInstancesLoader = isInstancesLoading && instances.length === 0;
@@ -451,6 +444,23 @@ export function App() {
   const canConnectToInstance = Boolean(
     activeProfileReady && selectedInstance?.state === "running" && selectedInstance?.ssmStatus === "ready",
   );
+  const connectionDisabledTitle = !activeProfileReady
+    ? "Validate the active profile first."
+    : selectedInstance?.ssmStatus !== "ready"
+      ? "SSM must be ready before opening a connection."
+      : undefined;
+  const canOpenConsoleDialog = Boolean(
+    activeProfileReady
+      && consoleInstanceId.trim()
+      && (!consoleTargetInstance || (consoleTargetInstance.state === "running" && consoleTargetInstance.ssmStatus === "ready")),
+  );
+  const consoleDialogDisabledTitle = !activeProfileReady
+    ? "Validate the active profile first."
+    : consoleTargetInstance && consoleTargetInstance.state !== "running"
+      ? "Resource offline."
+    : consoleTargetInstance && consoleTargetInstance.ssmStatus !== "ready"
+      ? "SSM must be ready before opening a console."
+      : undefined;
   const startSelection = useMemo(
     () => getInstancePowerSelection(instances, selectedInstanceIds, "start"),
     [instances, selectedInstanceIds],
@@ -458,10 +468,6 @@ export function App() {
   const stopSelection = useMemo(
     () => getInstancePowerSelection(instances, selectedInstanceIds, "stop"),
     [instances, selectedInstanceIds],
-  );
-  const terminalOptions = useMemo(
-    () => getTerminalOptions(environment?.platform),
-    [environment?.platform],
   );
   const addableProfiles = useMemo(
     () => getAddableProfiles(discoveredProfiles, savedProfiles),
@@ -560,8 +566,6 @@ export function App() {
       lastProfile: activeProfile || null,
       defaultSshUser: sshUser,
       sshKeyPath: sshKeyPath || null,
-      preferredTerminalPreset,
-      customTerminalCommand: null,
       preferredRdpClient: null,
       ...overrides,
     };
@@ -663,6 +667,9 @@ export function App() {
       invokeCommand<UserPreferences>("load_preferences"),
       invokeCommand<AwsProfile[]>("list_profiles"),
     ]);
+    const sanitizedPrefs = { ...prefs };
+    delete (sanitizedPrefs as Record<string, unknown>).preferredTerminalPreset;
+    delete (sanitizedPrefs as Record<string, unknown>).customTerminalCommand;
 
     const nextThemeMode = isThemeMode(prefs.themeMode) ? prefs.themeMode : "system";
     const nextSidebarWidth = typeof prefs.sidebarWidth === "number" ? clampSidebarWidth(prefs.sidebarWidth) : DEFAULT_SIDEBAR_WIDTH;
@@ -671,18 +678,15 @@ export function App() {
     const nextColumnWidths = normalizeInstanceTableColumnWidths(prefs.instanceTableColumnWidths);
     const normalizedSavedProfiles = normalizeSavedProfiles(profiles, prefs.savedProfiles, prefs.lastProfile);
     const nextActiveProfile = resolveActiveProfile(normalizedSavedProfiles, prefs.activeProfile || prefs.lastProfile || "");
-    const nextTerminalPreset = normalizeTerminalPreset(prefs.preferredTerminalPreset);
 
     storePreferences({
-      ...prefs,
+      ...sanitizedPrefs,
       themeMode: nextThemeMode,
       sidebarWidth: nextSidebarWidth,
       instanceTableVisibleColumns: nextVisibleColumns,
       instanceTableColumnWidths: nextColumnWidths,
       savedProfiles: normalizedSavedProfiles,
       activeProfile: nextActiveProfile || null,
-      preferredTerminalPreset: nextTerminalPreset,
-      customTerminalCommand: null,
     });
 
     setDiscoveredProfiles(profiles);
@@ -690,7 +694,6 @@ export function App() {
     setActiveProfile(nextActiveProfile);
     setSshUser(prefs.defaultSshUser || "ec2-user");
     setSshKeyPath(prefs.sshKeyPath || "");
-    setPreferredTerminalPreset(nextTerminalPreset);
     setThemeMode(nextThemeMode);
     setSidebarWidth(nextSidebarWidth);
     setInstanceTableVisibleColumns(nextVisibleColumns);
@@ -700,15 +703,6 @@ export function App() {
     if (initialVisibleColumns.migrated) {
       await savePreferencesPatch({ instanceTableVisibleColumns: nextVisibleColumns });
     }
-  }
-
-  async function setTerminalPresetPreference(nextPreset: TerminalPreset) {
-    const normalizedPreset = normalizeTerminalPreset(nextPreset);
-    setPreferredTerminalPreset(normalizedPreset);
-    await savePreferencesPatch(buildConnectionPreferences({
-      preferredTerminalPreset: normalizedPreset,
-      customTerminalCommand: null,
-    }));
   }
 
   async function browseForSshKeyPath() {
@@ -1125,22 +1119,6 @@ export function App() {
     }
   }
 
-  async function startShellSession() {
-    if (!selectedInstance || !activeProfile || !activeProfileRegion) return;
-    const session = await invokeCommand<SessionRecord>("start_shell_session", {
-      request: {
-        profile: activeProfile,
-        region: activeProfileRegion,
-        instanceId: selectedInstance.instanceId,
-        terminalPreset: preferredTerminalPreset,
-        customTerminalCommand: null,
-      },
-    });
-    setNotice("Shell session launched in your terminal.");
-    setSessions((current) => [session, ...current]);
-    await loadDiagnostics();
-  }
-
   async function startPortForward() {
     if (!selectedInstance || !activeProfile || !activeProfileRegion) return;
     const requestedRemotePort = window.prompt("Remote port for this tunnel", "");
@@ -1176,11 +1154,11 @@ export function App() {
         profile: activeProfile,
         region: activeProfileRegion,
         instanceId: trimmedInstanceId,
-        localPort: customLocalPort ? Number(customLocalPort) : null,
-        username: sshUser || null,
-        sshKeyPath: sshKeyPath || null,
-        rdpUsername: rdpUsername || null,
-        rdpPassword: rdpPassword || null,
+        localPort: kind === "shell" ? null : customLocalPort ? Number(customLocalPort) : null,
+        username: kind === "ssh" ? sshUser || null : null,
+        sshKeyPath: kind === "ssh" ? sshKeyPath || null : null,
+        rdpUsername: kind === "rdp" ? rdpUsername || null : null,
+        rdpPassword: kind === "rdp" ? rdpPassword || null : null,
         terminalCols: 100,
         terminalRows: 30,
         width: 1280,
@@ -1195,7 +1173,7 @@ export function App() {
     setNotice(
       session.status === "failed"
         ? session.message || "Console session could not start."
-        : `${kind.toUpperCase()} console opened for ${trimmedInstanceId}.`,
+        : `${consoleKindLabel(kind)} console opened for ${trimmedInstanceId}.`,
     );
     await loadSessions();
     await loadDiagnostics();
@@ -1433,7 +1411,6 @@ export function App() {
     const previewProfile = "demo-profile";
     setSavedProfiles([previewProfile]);
     setActiveProfile(previewProfile);
-    setPreferredTerminalPreset("systemDefault");
     setProfileStates({
       [previewProfile]: {
         profileName: previewProfile,
@@ -2136,40 +2113,94 @@ export function App() {
                       </div>
                     </div>
 
-                    <div className="inspector-section">
+                    <div className="inspector-section connection-actions">
                       <h3>Connection actions</h3>
-                      <p className="muted">These launch through the active validated profile and use the primary selected instance.</p>
-                    </div>
+                      {selectedInstance.state !== "running" ? (
+                        <p className="resource-offline">Resource offline</p>
+                      ) : (
+                        <>
+                          <p className="muted">These launch through the active validated profile and use the primary selected instance.</p>
+                          <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
+                            <button
+                              className={instanceConnectionKind === "shell" ? "active" : ""}
+                              onClick={() => setInstanceConnectionKind("shell")}
+                              type="button"
+                            >
+                              Direct SSM (Shell)
+                            </button>
+                            <button
+                              className={instanceConnectionKind === "ssh" ? "active" : ""}
+                              onClick={() => setInstanceConnectionKind("ssh")}
+                              type="button"
+                            >
+                              SSH
+                            </button>
+                            <button
+                              className={instanceConnectionKind === "rdp" ? "active" : ""}
+                              onClick={() => setInstanceConnectionKind("rdp")}
+                              type="button"
+                            >
+                              RDP
+                            </button>
+                          </div>
 
-                    <label>
-                      Default terminal
-                      <select onChange={(event) => void setTerminalPresetPreference(event.target.value as TerminalPreset)} value={preferredTerminalPreset}>
-                        {terminalOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      SSH user
-                      <input onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
-                    </label>
-                    <div className="field-group">
-                      <span className="field-group__label">SSH key path</span>
-                      <div className="path-input-row">
-                        <input onChange={(event) => setSshKeyPath(event.target.value)} placeholder="Optional" value={sshKeyPath} />
-                        <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
-                      </div>
-                    </div>
-                    <label>
-                      Local port
-                      <input onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="Auto" value={customLocalPort} />
-                    </label>
+                          {instanceConnectionKind === "ssh" && (
+                            <>
+                              <label>
+                                SSH user
+                                <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
+                              </label>
+                              <div className="field-group">
+                                <span className="field-group__label">SSH key path</span>
+                                <div className="path-input-row">
+                                  <input {...technicalInputProps} onChange={(event) => setSshKeyPath(event.target.value)} placeholder="Optional" value={sshKeyPath} />
+                                  <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
+                                </div>
+                              </div>
+                            </>
+                          )}
 
-                    <div className="action-stack">
-                      <button disabled={!canConnectToInstance} onClick={() => void startConsoleSession("rdp")} title={!activeProfileReady ? "Validate the active profile first." : undefined}>Open RDP</button>
-                      <button disabled={!canConnectToInstance} onClick={() => void startConsoleSession("ssh")} title={!activeProfileReady ? "Validate the active profile first." : undefined}>Open SSH</button>
-                      <button disabled={!canConnectToInstance} onClick={() => void startShellSession()} title={!activeProfileReady ? "Validate the active profile first." : undefined}>Start Shell</button>
-                      <button disabled={!canConnectToInstance} onClick={() => void startPortForward()} title={!activeProfileReady ? "Validate the active profile first." : undefined}>Start Tunnel</button>
+                          {instanceConnectionKind === "rdp" && (
+                            <>
+                              <label>
+                                RDP username
+                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                              </label>
+                              <label>
+                                RDP password
+                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                              </label>
+                            </>
+                          )}
+
+                          {instanceConnectionKind !== "shell" && (
+                            <label>
+                              Local port
+                              <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="Auto" value={customLocalPort} />
+                            </label>
+                          )}
+
+                          <div className="action-stack connection-actions__buttons">
+                            <button
+                              className="button-primary"
+                              disabled={!canConnectToInstance}
+                              onClick={() => void startConsoleSession(instanceConnectionKind)}
+                              title={connectionDisabledTitle}
+                              type="button"
+                            >
+                              {consoleOpenLabel(instanceConnectionKind)}
+                            </button>
+                            <button
+                              disabled={!canConnectToInstance}
+                              onClick={() => void startPortForward()}
+                              title={connectionDisabledTitle}
+                              type="button"
+                            >
+                              Start Tunnel
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -2241,7 +2272,7 @@ export function App() {
                 aria-label="Add console tab"
                 className="console-tabs__add"
                 onClick={() => {
-                  setConsoleInstanceId(selectedInstance?.instanceId ?? "");
+                  setConsoleInstanceId(selectedInstance?.state === "running" ? selectedInstance.instanceId : "");
                   setIsConsoleDialogOpen(true);
                 }}
                 title="Add console tab"
@@ -2262,6 +2293,13 @@ export function App() {
                   </div>
                   <div className="segmented-control" role="group" aria-label="Console type">
                     <button
+                      className={consoleSessionKind === "shell" ? "active" : ""}
+                      onClick={() => setConsoleSessionKind("shell")}
+                      type="button"
+                    >
+                      Direct SSM (Shell)
+                    </button>
+                    <button
                       className={consoleSessionKind === "ssh" ? "active" : ""}
                       onClick={() => setConsoleSessionKind("ssh")}
                       type="button"
@@ -2279,17 +2317,18 @@ export function App() {
                   <label>
                     Instance ID
                     <input
+                      {...technicalInputProps}
                       onChange={(event) => setConsoleInstanceId(event.target.value)}
                       placeholder="i-..."
                       value={consoleInstanceId}
                     />
                   </label>
-                  {instances.length > 0 && (
+                  {runningInstances.length > 0 && (
                     <label>
-                      Loaded instances
+                      Select instance
                       <select onChange={(event) => setConsoleInstanceId(event.target.value)} value={consoleInstanceId}>
                         <option value="">Choose an instance</option>
-                        {instances.map((instance) => (
+                        {runningInstances.map((instance) => (
                           <option key={instance.instanceId} value={instance.instanceId}>
                             {instance.name ? `${instance.name} - ${instance.instanceId}` : instance.instanceId}
                           </option>
@@ -2301,41 +2340,46 @@ export function App() {
                     <>
                       <label>
                         SSH user
-                        <input onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
+                        <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
                       </label>
                       <div className="field-group">
                         <span className="field-group__label">SSH key path</span>
                         <div className="path-input-row">
-                          <input onChange={(event) => setSshKeyPath(event.target.value)} placeholder="Optional" value={sshKeyPath} />
+                          <input {...technicalInputProps} onChange={(event) => setSshKeyPath(event.target.value)} placeholder="Optional" value={sshKeyPath} />
                           <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
                         </div>
                       </div>
                     </>
-                  ) : (
+                  ) : consoleSessionKind === "rdp" ? (
                     <>
                       <label>
                         RDP username
-                        <input onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
                       </label>
                       <label>
                         RDP password
-                        <input onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
                       </label>
                     </>
+                  ) : (
+                    null
                   )}
-                  <label>
-                    Local port
-                    <input onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="Auto" value={customLocalPort} />
-                  </label>
+                  {consoleSessionKind !== "shell" && (
+                    <label>
+                      Local port
+                      <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="Auto" value={customLocalPort} />
+                    </label>
+                  )}
                   <div className="button-row">
                     <button className="button-ghost" onClick={() => setIsConsoleDialogOpen(false)} type="button">Cancel</button>
                     <button
                       className="button-primary"
-                      disabled={!activeProfileReady || !consoleInstanceId.trim()}
+                      disabled={!canOpenConsoleDialog}
                       onClick={() => void startConsoleSession(consoleSessionKind, consoleInstanceId)}
+                      title={consoleDialogDisabledTitle}
                       type="button"
                     >
-                      Open {consoleSessionKind.toUpperCase()}
+                      {consoleOpenLabel(consoleSessionKind)}
                     </button>
                   </div>
                 </div>

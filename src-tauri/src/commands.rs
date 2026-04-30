@@ -390,6 +390,15 @@ pub fn start_console_session(
     state: State<'_, AppState>,
     request: ConsoleSessionRequest,
 ) -> Result<ConsoleSessionRecord, String> {
+    if matches!(request.kind, crate::models::ConsoleSessionKind::Shell) {
+        let managed_session = console::shell_console_session(app, &request)?;
+        let mut registry = state
+            .consoles
+            .lock()
+            .map_err(|_| "Console registry is unavailable".to_string())?;
+        return Ok(registry.insert(managed_session));
+    }
+
     if matches!(request.kind, crate::models::ConsoleSessionKind::Rdp)
         && !console::guacd_is_available()
     {
@@ -411,6 +420,7 @@ pub fn start_console_session(
     }
 
     let tunnel_request = match request.kind {
+        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions do not use tunnels"),
         crate::models::ConsoleSessionKind::Ssh => sessions::ssh::request(
             &request.profile,
             &request.region,
@@ -425,12 +435,14 @@ pub fn start_console_session(
         ),
     };
     let tunnel_kind = match request.kind {
+        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions do not use tunnels"),
         crate::models::ConsoleSessionKind::Ssh => SessionKind::Ssh,
         crate::models::ConsoleSessionKind::Rdp => SessionKind::Rdp,
     };
     let tunnel_record = start_tunnel(&state, tunnel_request, tunnel_kind)?;
 
     let managed_session = match request.kind {
+        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions are created before tunnel setup"),
         crate::models::ConsoleSessionKind::Ssh => {
             console::ssh_console_session(app, &request, tunnel_record)
         }
