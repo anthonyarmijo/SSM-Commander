@@ -12,7 +12,7 @@ Required:
 
 Recommended:
 
-- `guacd` for embedded RDP console tabs during development
+- Docker, or a native `guacd` binary, for embedded RDP console tabs during development
 - FreeRDP for external RDP fallback
 
 Example Homebrew installs:
@@ -20,8 +20,32 @@ Example Homebrew installs:
 ```sh
 brew install awscli
 brew install --cask session-manager-plugin
-brew install guacamole-server
 brew install freerdp
+```
+
+Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app expects
+`guacd` to be reachable on `127.0.0.1:4822`; packaged builds can also use a
+bundled sidecar when one is available. Homebrew may not provide a
+`guacamole-server` formula on macOS, so the recommended development fallback is
+to run the official `guacd` container:
+
+```sh
+docker run --rm --name ssm-commander-guacd \
+  -p 127.0.0.1:4822:4822 \
+  guacamole/guacd
+```
+
+Verify that the bridge is listening before opening an embedded RDP session:
+
+```sh
+nc -zv 127.0.0.1 4822
+```
+
+If you install a native `guacd` binary instead, bind it to the same address and
+port:
+
+```sh
+guacd -f -b 127.0.0.1 -l 4822
 ```
 
 Development builds also require Rust:

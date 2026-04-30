@@ -34,11 +34,30 @@ The instance must be a managed node, the SSM Agent must be running, and IAM perm
 
 ## Embedded RDP Does Not Open
 
-Install or start `guacd` for development fallback:
+Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app shows
+"Embedded RDP is not ready" when it cannot find a `guacd` binary or connect to a
+bridge on `127.0.0.1:4822`.
+
+On macOS, Homebrew may not provide a `guacamole-server` formula. For development,
+run the official `guacd` container instead:
 
 ```sh
-brew install guacamole-server
-guacd -f -l 127.0.0.1
+docker run --rm --name ssm-commander-guacd \
+  -p 127.0.0.1:4822:4822 \
+  guacamole/guacd
+```
+
+In another terminal, verify the bridge is reachable:
+
+```sh
+nc -zv 127.0.0.1 4822
+```
+
+If you already have a native `guacd` binary, start it on the address and port the
+app expects:
+
+```sh
+guacd -f -b 127.0.0.1 -l 4822
 ```
 
 Packaged builds can use a bundled guacd sidecar. RDP credentials entered in Console are kept in memory only.
