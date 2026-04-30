@@ -1,4 +1,6 @@
 .DS_Store
+.codex/
+.vscode/
 node_modules/
 dist/
 dist-ssr/
@@ -8,4 +10,3 @@ src-tauri/gen/
 .env
 .env.*
 !.env.example
-package-lock.json
