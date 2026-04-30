@@ -1,0 +1,31 @@
+[package]
+name = "ssm-commander"
+version = "0.1.0"
+description = "SSM Commander desktop app for AWS Systems Manager access to EC2 instances"
+authors = ["Anthony"]
+license = "MIT"
+repository = "https://github.com/anthonyarmijo/ssm-mgmt-gui"
+edition = "2021"
+
+[lib]
+name = "ssm_commander_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "ssm-commander"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+dirs-next = "2"
+portable-pty = "0.9.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2.7.0"
+tauri-plugin-opener = "2"
+tungstenite = "0.29.0"
+uuid = { version = "1", features = ["v4", "serde"] }

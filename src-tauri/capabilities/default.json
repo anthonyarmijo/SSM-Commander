@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html" },
+        { "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html" },
+        { "url": "https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-overview" },
+        { "url": "https://www.openssh.com/portable.html" },
+        { "url": "https://guacamole.apache.org/doc/gug/installing-guacamole.html" },
+        { "url": "https://www.rust-lang.org/tools/install" },
+        { "url": "https://support.microsoft.com/en-us/windows/how-to-use-remote-desktop-*" },
+        { "url": "https://github.com/FreeRDP/FreeRDP/wiki/Compilation" }
+      ]
+    }
+  ]
+}

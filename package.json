@@ -1,0 +1,37 @@
+{
+  "name": "ssm-commander",
+  "version": "0.1.0",
+  "description": "SSM Commander desktop app for AWS Systems Manager access",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "build": "tsc && vite build",
+    "tauri:build": "tauri build",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "scan:secrets": "gitleaks detect --source . --redact --verbose"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-opener": "^2.5.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "guacamole-common-js": "^1.5.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
+  }
+}
