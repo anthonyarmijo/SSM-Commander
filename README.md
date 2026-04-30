@@ -2,11 +2,7 @@
 
 SSM Commander is a small Tauri app for browsing EC2 instances and launching AWS Systems Manager workflows from a desktop UI. It is designed for people who already use the AWS CLI and AWS SSO, but want a faster way to validate profiles, inspect instance readiness, start or stop instances, and run embedded SSH, RDP, shell, or port-forward sessions.
 
-## Screenshots
-
 ![SSM Commander home screen](docs/screenshots/app-home-dark.png)
-
-![SSM Commander console session with session ID blurred](docs/screenshots/console-session-redacted.png)
 
 ## Features
 
