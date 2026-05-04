@@ -356,6 +356,32 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
     } as T;
   }
 
+  if (command === "start_port_forward") {
+    const request = args?.request as Record<string, unknown> | undefined;
+    const remotePort = typeof request?.remotePort === "number" ? request.remotePort : 8080;
+    const localPort = typeof request?.localPort === "number" ? request.localPort : 54901;
+    const remoteHost = typeof request?.remoteHost === "string" ? request.remoteHost : null;
+    return {
+      id: `preview-tunnel-${Date.now()}`,
+      kind: "tunnel",
+      profile: "demo-profile",
+      region: "us-west-2",
+      instanceId: typeof request?.instanceId === "string" ? request.instanceId : "demo-node-alpha",
+      processId: 28170,
+      startedAt: new Date().toISOString(),
+      status: "active",
+      tunnel: {
+        localPort,
+        remoteHost,
+        remotePort,
+        allocation: typeof request?.localPort === "number" ? "requested" : "auto",
+        listenerStatus: "active",
+        sessionId: "s-tunnelpreview",
+      },
+      note: "Preview port-forward tunnel",
+    } as T;
+  }
+
   if (command === "get_sso_login_attempt") {
     const attemptId = typeof args?.attemptId === "string" ? args.attemptId : "";
     const attempt = previewSsoAttempts.get(attemptId);

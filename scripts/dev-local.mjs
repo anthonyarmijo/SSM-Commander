@@ -176,6 +176,10 @@ async function shutdown(exitCode = 0, signal) {
 function startTauri() {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   tauriProcess = spawn(npmCommand, ["run", "tauri:dev"], {
+    env: {
+      ...process.env,
+      SSM_COMMANDER_GUACD_RDP_HOST: "host.docker.internal",
+    },
     stdio: "inherit",
   });
 

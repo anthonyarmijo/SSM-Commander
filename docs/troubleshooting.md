@@ -46,6 +46,8 @@ npm start
 
 That command requires Docker Desktop to be running. It starts the Guacamole
 container, launches Tauri dev mode, and stops the container when you quit.
+In this workflow the app sets `SSM_COMMANDER_GUACD_RDP_HOST=host.docker.internal`
+so containerized `guacd` can reach SSM tunnels listening on the host.
 
 On macOS, Homebrew may not provide a `guacamole-server` formula. For development,
 you can also run the official `guacd` container manually:
@@ -68,6 +70,10 @@ app expects:
 ```sh
 guacd -f -b 127.0.0.1 -l 4822
 ```
+
+Native or bundled `guacd` uses `127.0.0.1` as the RDP target host by default.
+Override `SSM_COMMANDER_GUACD_RDP_HOST` only when `guacd` runs somewhere that
+cannot reach host services through loopback.
 
 Packaged builds can use a bundled guacd sidecar. RDP credentials entered in Console are kept in memory only.
 

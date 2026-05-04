@@ -51,6 +51,7 @@ import {
   type SavedProfileState,
 } from "../features/profiles/profileHelpers";
 import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacement";
+import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
 import { navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
 import type {
@@ -209,6 +210,14 @@ function CloseIcon() {
   );
 }
 
+function HidePanelIcon() {
+  return (
+    <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
+      <path d="m7 6 6 6-6 6M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
 function SunIcon() {
   return (
     <svg aria-hidden="true" className="theme-icon" fill="none" viewBox="0 0 24 24">
@@ -339,6 +348,10 @@ function isLoadedInstancesNotice(message: string): boolean {
   return /^Loaded \d+ instances\.$/.test(message.trim());
 }
 
+function buildInstanceActionsSelectionKey(primaryInstanceId: string, selectedInstanceIds: string[]): string {
+  return primaryInstanceId ? `${primaryInstanceId}::${selectedInstanceIds.join("|")}` : "";
+}
+
 export function App() {
   const previewConfig = useMemo(() => getBrowserPreviewConfig(), []);
   const [environment, setEnvironment] = useState<EnvironmentState | null>(null);
@@ -357,6 +370,13 @@ export function App() {
   const [consoleSessions, setConsoleSessions] = useState<ConsoleSessionRecord[]>([]);
   const [activeConsoleSessionId, setActiveConsoleSessionId] = useState("");
   const [isConsoleDialogOpen, setIsConsoleDialogOpen] = useState(false);
+  const [isTunnelDialogOpen, setIsTunnelDialogOpen] = useState(false);
+  const [isTunnelStarting, setIsTunnelStarting] = useState(false);
+  const [tunnelInstanceId, setTunnelInstanceId] = useState("");
+  const [tunnelRemotePort, setTunnelRemotePort] = useState("");
+  const [tunnelRemoteHost, setTunnelRemoteHost] = useState("");
+  const [tunnelLocalPort, setTunnelLocalPort] = useState("");
+  const [tunnelDialogError, setTunnelDialogError] = useState("");
   const [consoleSessionKind, setConsoleSessionKind] = useState<ConsoleSessionKind>("shell");
   const [instanceConnectionKind, setInstanceConnectionKind] = useState<ConsoleSessionKind>("rdp");
   const [consoleInstanceId, setConsoleInstanceId] = useState("");
@@ -368,10 +388,12 @@ export function App() {
   const [sshUser, setSshUser] = useState("ec2-user");
   const [sshKeyPath, setSshKeyPath] = useState("");
   const [customLocalPort, setCustomLocalPort] = useState("");
+  const [isInstancePortMappingEnabled, setIsInstancePortMappingEnabled] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [isPowerActionBusy, setIsPowerActionBusy] = useState(false);
   const [notice, setNotice] = useState("Ready.");
   const [activeView, setActiveView] = useState<ActiveView>("home");
+  const [isHomeAsciiArmed, setIsHomeAsciiArmed] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => getSystemTheme());
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
@@ -381,6 +403,7 @@ export function App() {
   const [instanceSort, setInstanceSort] = useState<InstanceTableSort | null>(null);
   const [expandedInstanceDetailId, setExpandedInstanceDetailId] = useState("");
   const [instanceContextMenu, setInstanceContextMenu] = useState<InstanceContextMenuState>(null);
+  const [dismissedInstanceActionsSelectionKey, setDismissedInstanceActionsSelectionKey] = useState("");
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false);
   const [isResizingTableColumn, setIsResizingTableColumn] = useState(false);
   const [isAddProfileOpen, setIsAddProfileOpen] = useState(false);
@@ -397,6 +420,10 @@ export function App() {
   const activeProfileReady = Boolean(activeProfile && activeProfileState?.authStatus === "valid" && activeProfileRegion);
   const currentAwsContextKey = buildAwsContextKey(activeProfile, activeProfileRegion);
   const selectedInstance = instances.find((instance) => instance.instanceId === selectedInstanceId) ?? null;
+  const selectedInstanceActionsKey = buildInstanceActionsSelectionKey(selectedInstanceId, selectedInstanceIds);
+  const shouldShowInstanceActionsOverlay = Boolean(
+    selectedInstance && selectedInstanceActionsKey !== dismissedInstanceActionsSelectionKey,
+  );
   const selectedInstanceDetailsExpanded = Boolean(selectedInstance && expandedInstanceDetailId === selectedInstance.instanceId);
   const selectedInstanceDetailPanelId = selectedInstance ? `instance-details-${selectedInstance.instanceId}` : undefined;
   const activeConsoleSession =
@@ -412,7 +439,7 @@ export function App() {
     () => buildInstanceTableLayout(instanceTableVisibleColumns, instanceTableColumnWidths),
     [instanceTableColumnWidths, instanceTableVisibleColumns],
   );
-  const visibleInstanceColumnCount = visibleInstanceTableColumns.length;
+  const visibleInstanceColumnCount = visibleInstanceTableColumns.length + 1;
   const instanceTableMinWidth = useMemo(
     () => visibleInstanceTableColumns.reduce((sum, column) => sum + column.width, 0),
     [visibleInstanceTableColumns],
@@ -1128,33 +1155,81 @@ export function App() {
     }
   }
 
-  async function startPortForward() {
-    if (!selectedInstance || !activeProfile || !activeProfileRegion) return;
-    const requestedRemotePort = window.prompt("Remote port for this tunnel", "");
-    if (!requestedRemotePort) return;
-    const remotePortValue = Number(requestedRemotePort);
-    if (!Number.isInteger(remotePortValue) || remotePortValue < 1 || remotePortValue > 65535) {
-      setNotice("Enter a valid remote port between 1 and 65535.");
-      return;
-    }
-    const requestedRemoteHost = window.prompt("Optional remote host (leave blank to use the instance)", "") || null;
-
-    const session = await invokeCommand<SessionRecord>("start_port_forward", {
-      request: {
-        profile: activeProfile,
-        region: activeProfileRegion,
-        instanceId: selectedInstance.instanceId,
-        remotePort: remotePortValue,
-        localPort: customLocalPort ? Number(customLocalPort) : null,
-        remoteHost: requestedRemoteHost && requestedRemoteHost.trim().length > 0 ? requestedRemoteHost.trim() : null,
-      },
-    });
-    setNotice(`Tunnel active on localhost:${session.tunnel?.localPort ?? "auto"}.`);
-    await loadSessions();
-    await loadDiagnostics();
+  function getInstanceActionsLocalPort(): number | null {
+    return isInstancePortMappingEnabled && customLocalPort ? Number(customLocalPort) : null;
   }
 
-  async function startConsoleSession(kind: ConsoleSessionKind, instanceId = selectedInstance?.instanceId ?? consoleInstanceId) {
+  function openTunnelDialog(instanceId: string) {
+    setTunnelInstanceId(instanceId);
+    setTunnelRemotePort("");
+    setTunnelRemoteHost("");
+    setTunnelLocalPort("");
+    setTunnelDialogError("");
+    setIsTunnelDialogOpen(true);
+  }
+
+  function cancelTunnelDialog() {
+    setIsTunnelDialogOpen(false);
+    setTunnelDialogError("");
+    setNotice("Tunnel start canceled.");
+  }
+
+  async function startPortForward() {
+    const trimmedInstanceId = tunnelInstanceId.trim();
+    if (!activeProfile || !activeProfileRegion || !trimmedInstanceId) return;
+
+    const validation = validateTunnelForm({
+      remotePort: tunnelRemotePort,
+      remoteHost: tunnelRemoteHost,
+      localPort: tunnelLocalPort,
+    });
+    if (!validation.ok) {
+      setTunnelDialogError(validation.message);
+      setNotice(validation.message);
+      return;
+    }
+
+    setIsTunnelStarting(true);
+    setTunnelDialogError("");
+    try {
+      const session = await invokeCommand<SessionRecord>(
+        "start_port_forward",
+        buildPortForwardInvokeArgs(
+          {
+            profile: activeProfile,
+            region: activeProfileRegion,
+            instanceId: trimmedInstanceId,
+          },
+          validation.value,
+        ),
+      );
+      const tunnel = session.tunnel;
+      const remoteTarget = `${tunnel?.remoteHost || "instance"}:${tunnel?.remotePort ?? validation.value.remotePort}`;
+      setNotice(`Tunnel active on localhost:${tunnel?.localPort ?? "auto"} -> ${remoteTarget}.`);
+      setIsTunnelDialogOpen(false);
+      await loadSessions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isSsoLoginError(message)) {
+        updateProfileState(activeProfile, (current) => ({
+          ...current,
+          authStatus: "expired",
+          validationMessage: message,
+        }));
+      }
+      setTunnelDialogError(`Could not start tunnel: ${message}`);
+      setNotice(`Could not start tunnel: ${message}`);
+    } finally {
+      setIsTunnelStarting(false);
+      await loadDiagnostics();
+    }
+  }
+
+  async function startConsoleSession(
+    kind: ConsoleSessionKind,
+    instanceId = selectedInstance?.instanceId ?? consoleInstanceId,
+    localPortOverride?: number | null,
+  ) {
     const trimmedInstanceId = instanceId.trim();
     if (!activeProfile || !activeProfileRegion || !trimmedInstanceId) return;
     const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
@@ -1163,7 +1238,11 @@ export function App() {
         profile: activeProfile,
         region: activeProfileRegion,
         instanceId: trimmedInstanceId,
-        localPort: kind === "shell" ? null : customLocalPort ? Number(customLocalPort) : null,
+        localPort: kind === "shell"
+          ? null
+          : localPortOverride === undefined
+            ? (customLocalPort ? Number(customLocalPort) : null)
+            : localPortOverride,
         username: kind === "ssh" ? sshUser || null : null,
         sshKeyPath: kind === "ssh" ? sshKeyPath || null : null,
         rdpUsername: kind === "rdp" ? rdpUsername || null : null,
@@ -1284,6 +1363,12 @@ export function App() {
     setSelectedInstanceIds(nextSelection.selectedInstanceIds);
     setSelectedInstanceId(nextSelection.primarySelectedInstanceId);
     setSelectionAnchorId(nextSelection.anchorInstanceId);
+    if (
+      buildInstanceActionsSelectionKey(nextSelection.primarySelectedInstanceId, nextSelection.selectedInstanceIds)
+      !== selectedInstanceActionsKey
+    ) {
+      setDismissedInstanceActionsSelectionKey("");
+    }
   }
 
   function handleInstanceDetailsToggle(event: ReactMouseEvent<HTMLButtonElement>, instanceId: string) {
@@ -1301,7 +1386,14 @@ export function App() {
     setSelectedInstanceId(instanceId);
     setSelectionAnchorId(instanceId);
     setExpandedInstanceDetailId((current) => current === instanceId ? current : "");
+    if (buildInstanceActionsSelectionKey(instanceId, [instanceId]) !== selectedInstanceActionsKey) {
+      setDismissedInstanceActionsSelectionKey("");
+    }
     setInstanceContextMenu({ instanceId, x, y });
+  }
+
+  function dismissInstanceActionsOverlay() {
+    setDismissedInstanceActionsSelectionKey(selectedInstanceActionsKey);
   }
 
   useEffect(() => {
@@ -1358,10 +1450,45 @@ export function App() {
   }, [instanceContextMenu]);
 
   useEffect(() => {
+    if (!shouldShowInstanceActionsOverlay) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        dismissInstanceActionsOverlay();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [shouldShowInstanceActionsOverlay, selectedInstanceActionsKey]);
+
+  useEffect(() => {
     if (activeView !== "instances" && instanceContextMenu) {
       setInstanceContextMenu(null);
     }
   }, [activeView, instanceContextMenu]);
+
+  useEffect(() => {
+    if (activeView !== "home") {
+      setIsHomeAsciiArmed(false);
+      return;
+    }
+
+    setIsHomeAsciiArmed(false);
+    let secondFrameId = 0;
+    const firstFrameId = window.requestAnimationFrame(() => {
+      secondFrameId = window.requestAnimationFrame(() => {
+        setIsHomeAsciiArmed(true);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrameId);
+      if (secondFrameId) {
+        window.cancelAnimationFrame(secondFrameId);
+      }
+    };
+  }, [activeView]);
 
   useEffect(() => {
     if (instanceContextMenu && !instances.some((instance) => instance.instanceId === instanceContextMenu.instanceId)) {
@@ -1580,7 +1707,7 @@ export function App() {
         {activeView === "home" && (
           <section className="view view--home-brand" aria-labelledby="home-title">
             <h2 className="visually-hidden" id="home-title">SSM Commander</h2>
-            <div className="ascii-banner" aria-label="SSM Commander">
+            <div className={`ascii-banner ${isHomeAsciiArmed ? "ascii-banner--armed" : ""}`.trim()} aria-label="SSM Commander">
               {SSM_COMMANDER_ASCII.map((line, index) => (
                 <pre key={line} style={{ "--line-index": index } as CSSProperties}>{line}</pre>
               ))}
@@ -1918,7 +2045,7 @@ export function App() {
         )}
 
         {activeView === "instances" && (
-          <section className="view" aria-labelledby="instances-title">
+          <section className="view view--instances" aria-labelledby="instances-title">
             <header className="topbar">
               <div>
                 <p className="eyebrow">Instances</p>
@@ -1997,6 +2124,7 @@ export function App() {
 	                      {visibleInstanceTableColumns.map((column) => (
 	                        <col key={column.definition.id} style={{ width: `${column.width}px` }} />
 	                      ))}
+                        <col className="instance-table__fill-column" />
 	                    </colgroup>
 	                    <thead>
 	                      <tr>
@@ -2028,6 +2156,7 @@ export function App() {
                             </div>
 	                          </th>
 	                        ))}
+                          <th aria-hidden="true" className="instance-table__fill-cell" />
 	                      </tr>
 	                    </thead>
                     <tbody>
@@ -2052,6 +2181,7 @@ export function App() {
 	                            {visibleInstanceTableColumns.map((column) => (
 	                              <td key={`${instance.instanceId}-${column.definition.id}`}>{column.definition.renderCell(instance)}</td>
 	                            ))}
+                              <td aria-hidden="true" className="instance-table__fill-cell" />
 	                          </tr>
 	                        );
 	                      })}
@@ -2065,22 +2195,38 @@ export function App() {
                 </div>
               </section>
 
-	              <aside className="inspector">
+              {shouldShowInstanceActionsOverlay && selectedInstance && (
+	              <aside
+                  aria-label={`Instance actions for ${selectedInstance.instanceId}`}
+                  aria-modal="false"
+                  className="inspector instance-actions-overlay"
+                  role="dialog"
+                >
 	                <div className="inspector__heading">
 	                  <h2>{selectedInstanceIds.length > 1 ? "Primary Instance Actions" : "Instance Actions"}</h2>
-	                  {selectedInstance && selectedInstanceDetailPanelId && (
-	                    <button
-	                      aria-controls={selectedInstanceDetailPanelId}
-	                      aria-expanded={selectedInstanceDetailsExpanded}
-	                      className="button-ghost instance-details-toggle"
-	                      onClick={(event) => handleInstanceDetailsToggle(event, selectedInstance.instanceId)}
-	                      type="button"
-	                    >
-	                      {selectedInstanceDetailsExpanded ? "Hide details" : "Details"}
-	                    </button>
-	                  )}
+                    <div className="instance-actions-overlay__heading-actions">
+                      {selectedInstanceDetailPanelId && (
+                        <button
+                          aria-controls={selectedInstanceDetailPanelId}
+                          aria-expanded={selectedInstanceDetailsExpanded}
+                          className="button-ghost instance-details-toggle"
+                          onClick={(event) => handleInstanceDetailsToggle(event, selectedInstance.instanceId)}
+                          type="button"
+                        >
+                          {selectedInstanceDetailsExpanded ? "Hide details" : "Details"}
+                        </button>
+                      )}
+                      <button
+                        aria-label="Hide instance actions"
+                        className="button-ghost icon-button instance-actions-overlay__hide"
+                        onClick={dismissInstanceActionsOverlay}
+                        title="Hide instance actions"
+                        type="button"
+                      >
+                        <HidePanelIcon />
+                      </button>
+                    </div>
 	                </div>
-	                {selectedInstance ? (
 	                  <>
 	                    {selectedInstanceDetailsExpanded && selectedInstanceDetailPanelId && (
 	                      <div className="instance-detail-panel instance-detail-panel--inspector detail-stack" id={selectedInstanceDetailPanelId}>
@@ -2119,7 +2265,6 @@ export function App() {
                         <p className="resource-offline">Resource offline</p>
                       ) : (
                         <>
-                          <p className="muted">These launch through the active validated profile and use the primary selected instance.</p>
                           <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
                             <button
                               className={instanceConnectionKind === "rdp" ? "active" : ""}
@@ -2182,28 +2327,40 @@ export function App() {
                           )}
 
                           {instanceConnectionKind !== "shell" && (
-                            <label>
-                              Local port
-                              <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="Auto" value={customLocalPort} />
-                            </label>
+                            <>
+                              <label className="instance-port-toggle">
+                                <input
+                                  checked={isInstancePortMappingEnabled}
+                                  onChange={(event) => setIsInstancePortMappingEnabled(event.target.checked)}
+                                  type="checkbox"
+                                />
+                                <span>User-defined port-mapping?</span>
+                              </label>
+                              {isInstancePortMappingEnabled && (
+                                <label>
+                                  Local port
+                                  <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="49152" value={customLocalPort} />
+                                </label>
+                              )}
+                            </>
                           )}
 
                           <div className="action-stack connection-actions__buttons">
                             <button
                               className="button-primary"
                               disabled={!canConnectToInstance}
-                              onClick={() => void startConsoleSession(instanceConnectionKind)}
+                              onClick={() => void startConsoleSession(instanceConnectionKind, selectedInstance.instanceId, getInstanceActionsLocalPort())}
                               title={connectionDisabledTitle}
                               type="button"
                             >
                               {consoleOpenLabel(instanceConnectionKind)}
-                            </button>
-                            <button
-                              disabled={!canConnectToInstance}
-                              onClick={() => void startPortForward()}
-                              title={connectionDisabledTitle}
-                              type="button"
-                            >
+	                            </button>
+	                            <button
+	                              disabled={!canConnectToInstance}
+	                              onClick={() => openTunnelDialog(selectedInstance.instanceId)}
+	                              title={connectionDisabledTitle}
+	                              type="button"
+	                            >
                               Start Tunnel
                             </button>
                           </div>
@@ -2211,10 +2368,8 @@ export function App() {
                       )}
                     </div>
                   </>
-                ) : (
-                  <p className="muted">Select an EC2 instance to see power and connection actions.</p>
-	                )}
 	              </aside>
+              )}
 	            </div>
 	            {contextMenuInstance && instanceContextMenu && (
 	              <div
@@ -2245,8 +2400,67 @@ export function App() {
 	                </button>
 	              </div>
 	            )}
-	          </section>
-	        )}
+		          </section>
+		        )}
+
+        {isTunnelDialogOpen && (
+          <div className="console-dialog tunnel-dialog" role="dialog" aria-modal="true" aria-labelledby="tunnel-dialog-title">
+            <form
+              className="console-dialog__panel tunnel-dialog__panel"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void startPortForward();
+              }}
+            >
+              <div className="section-heading">
+                <div>
+                  <h2 id="tunnel-dialog-title">Start tunnel</h2>
+                  <p className="muted">Instance <code>{tunnelInstanceId}</code></p>
+                </div>
+                <button className="button-ghost icon-button" disabled={isTunnelStarting} onClick={cancelTunnelDialog} type="button">
+                  <CloseIcon />
+                </button>
+              </div>
+              {tunnelDialogError && <div className="notice notice--compact notice--error">{tunnelDialogError}</div>}
+              <label>
+                Remote port
+                <input
+                  {...technicalInputProps}
+                  autoFocus
+                  inputMode="numeric"
+                  onChange={(event) => setTunnelRemotePort(event.target.value)}
+                  placeholder="3389"
+                  value={tunnelRemotePort}
+                />
+              </label>
+              <label>
+                Remote host
+                <input
+                  {...technicalInputProps}
+                  onChange={(event) => setTunnelRemoteHost(event.target.value)}
+                  placeholder="Leave blank to use the instance"
+                  value={tunnelRemoteHost}
+                />
+              </label>
+              <label>
+                Local port
+                <input
+                  {...technicalInputProps}
+                  inputMode="numeric"
+                  onChange={(event) => setTunnelLocalPort(event.target.value)}
+                  placeholder="Auto"
+                  value={tunnelLocalPort}
+                />
+              </label>
+              <div className="button-row">
+                <button className="button-ghost" disabled={isTunnelStarting} onClick={cancelTunnelDialog} type="button">Cancel</button>
+                <button className="button-primary" disabled={isTunnelStarting} type="submit">
+                  {isTunnelStarting ? "Starting..." : "Start Tunnel"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {activeView === "console" && (
           <section className="view view--console" aria-label="Console">

@@ -1254,15 +1254,21 @@ code {
 }
 
 .ascii-banner pre {
-  animation: matrix-reveal 780ms ease both;
-  animation-delay: calc(var(--line-index) * 90ms);
+  clip-path: inset(0 100% 0 0);
   font: inherit;
   font-size: clamp(10px, 1.25vw, 16px);
   line-height: 1.16;
   margin: 0;
+  opacity: 0;
   text-align: left;
   text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 16%, transparent);
+  transform: translateY(6px);
   white-space: pre;
+}
+
+.ascii-banner--armed pre {
+  animation: matrix-reveal 780ms ease both;
+  animation-delay: calc(var(--line-index) * 90ms);
 }
 
 .home-context {
@@ -1409,9 +1415,10 @@ code {
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   min-height: 0;
+  position: relative;
 }
 
 .instance-area {
@@ -1431,6 +1438,20 @@ code {
 
 .instance-area .table-frame {
   min-height: 360px;
+}
+
+.instance-area table {
+  table-layout: fixed;
+}
+
+.instance-table__fill-column {
+  width: auto;
+}
+
+.instance-area th.instance-table__fill-cell,
+.instance-area td.instance-table__fill-cell {
+  padding-inline: 0;
+  width: auto;
 }
 
 .table-tools__actions {
@@ -1739,6 +1760,25 @@ tr.selected--primary td {
   gap: 14px;
 }
 
+.instance-actions-overlay {
+  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 22px 58px rgba(15, 23, 42, 0.2);
+  max-height: min(70vh, 680px);
+  overflow: auto;
+  padding: 14px;
+  position: absolute;
+  right: 18px;
+  top: 56px;
+  width: min(300px, calc(100% - 36px));
+  z-index: 8;
+}
+
+[data-theme="dark"] .instance-actions-overlay {
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.36);
+}
+
 .inspector__heading {
   align-items: center;
   display: flex;
@@ -1748,6 +1788,66 @@ tr.selected--primary td {
 
 .inspector__heading h2 {
   margin: 0;
+}
+
+.instance-actions-overlay__heading-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.instance-actions-overlay__hide {
+  min-width: 30px;
+}
+
+.instance-actions-overlay label,
+.instance-actions-overlay .field-group {
+  max-width: 240px;
+}
+
+.instance-actions-overlay input:not([type="checkbox"]),
+.instance-actions-overlay select {
+  min-height: 34px;
+  padding-block: 7px;
+}
+
+.instance-actions-overlay .segmented-control--connection {
+  max-width: 240px;
+}
+
+.instance-actions-overlay .segmented-control--connection button {
+  font-size: 11px;
+  line-height: 1.12;
+  min-height: 28px;
+  padding: 4px 5px;
+}
+
+.instance-port-toggle {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 8px;
+  line-height: 1.25;
+  max-width: fit-content;
+}
+
+.instance-port-toggle input {
+  accent-color: var(--accent);
+  height: 14px;
+  margin: 0;
+  width: 14px;
+}
+
+.instance-actions-overlay .path-input-row {
+  gap: 6px;
+  max-width: 100%;
+}
+
+.instance-actions-overlay .path-input-row button {
+  padding-inline: 7px;
+  white-space: nowrap;
 }
 
 .inspector button {
@@ -1767,7 +1867,18 @@ tr.selected--primary td {
 }
 
 .connection-actions__buttons {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, max-content);
+  justify-content: start;
+}
+
+.instance-actions-overlay .connection-actions__buttons {
+  gap: 6px;
+}
+
+.instance-actions-overlay .connection-actions__buttons button,
+.instance-actions-overlay .action-stack--inline button {
+  min-width: 86px;
+  padding-inline: 8px;
 }
 
 .resource-offline {
@@ -1779,7 +1890,12 @@ tr.selected--primary td {
 }
 
 .action-stack--inline {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, max-content);
+  justify-content: start;
+}
+
+.instance-actions-overlay .action-stack--inline {
+  gap: 6px;
 }
 
 .detail-stack {
@@ -1878,7 +1994,7 @@ tr.selected--primary td {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ascii-banner pre {
+  .ascii-banner--armed pre {
     animation: ascii-fade 220ms ease both;
   }
 

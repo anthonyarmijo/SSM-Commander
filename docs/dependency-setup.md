@@ -32,7 +32,9 @@ npm start
 
 `npm start` requires Docker Desktop to be running. It starts the official
 `guacd` container on `127.0.0.1:4822`, launches Tauri dev mode, and stops the
-container when you quit.
+container when you quit. The launcher also sets
+`SSM_COMMANDER_GUACD_RDP_HOST=host.docker.internal` so `guacd` can connect back
+to SSM tunnel ports opened on the host.
 
 For manual development, the app expects `guacd` to be reachable on
 `127.0.0.1:4822`; packaged builds can also use a bundled sidecar when one is
@@ -57,6 +59,10 @@ port:
 ```sh
 guacd -f -b 127.0.0.1 -l 4822
 ```
+
+Native or bundled `guacd` targets `127.0.0.1` by default. Set
+`SSM_COMMANDER_GUACD_RDP_HOST` only if your bridge runs outside the host network
+namespace and needs a different route back to the local SSM tunnel.
 
 Development builds also require Rust:
 

@@ -18,8 +18,8 @@ describe("instance table column preferences", () => {
   });
 
   it("clamps saved widths to column minimums and ignores invalid entries", () => {
-    expect(normalizeInstanceTableColumnWidths({ name: 90, privateIp: 200, unknown: 300, state: Number.NaN })).toEqual({
-      name: 110,
+    expect(normalizeInstanceTableColumnWidths({ name: 60, privateIp: 200, unknown: 300, state: Number.NaN })).toEqual({
+      name: 72,
       privateIp: 200,
     });
   });
@@ -58,7 +58,7 @@ describe("instance table layout", () => {
 
     expect(layout.map((column) => [column.definition.id, column.width])).toEqual([
       ["name", 320],
-      ["instanceId", 170],
+      ["instanceId", 190],
       ["state", 72],
     ]);
   });
