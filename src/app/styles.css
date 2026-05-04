@@ -910,9 +910,16 @@ code {
   border: 1px solid var(--line);
   color: var(--text);
   display: inline-flex;
-  gap: 8px;
+  font-size: 12px;
+  gap: 6px;
   justify-self: start;
-  padding: 8px 12px;
+  min-height: 30px;
+  padding: 5px 9px;
+}
+
+.profile-panel__add-button svg {
+  height: 14px;
+  width: 14px;
 }
 
 .profile-panel__add-button:hover {
@@ -1324,6 +1331,17 @@ code {
   font-size: 22px;
 }
 
+.instance-context-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 6px 0 0;
+}
+
+.instance-context-meta code {
+  color: var(--text);
+}
+
 .notice {
   border-left: 4px solid var(--info);
   background: var(--info-bg);
@@ -1602,30 +1620,7 @@ tr {
   cursor: pointer;
 }
 
-.instance-row-actions-header,
-.instance-row-actions {
-  min-width: 104px;
-  position: sticky;
-  right: 0;
-  text-align: right;
-  width: 104px;
-}
-
-.instance-row-actions-header {
-  background: var(--table-header-bg);
-  z-index: 3;
-}
-
-.instance-row-actions {
-  background: var(--surface);
-  z-index: 1;
-}
-
 tr.selected td {
-  background: var(--selected-row-bg);
-}
-
-tr.selected .instance-row-actions {
   background: var(--selected-row-bg);
 }
 
@@ -1643,17 +1638,6 @@ tr.selected--primary td {
   min-height: 26px;
   min-width: 68px;
   padding: 4px 8px;
-}
-
-.instance-detail-row {
-  cursor: default;
-}
-
-.instance-area .instance-detail-cell {
-  background: color-mix(in srgb, var(--surface) 86%, var(--muted-bg));
-  overflow: visible;
-  padding: 0;
-  white-space: normal;
 }
 
 .instance-detail-panel {
@@ -1674,6 +1658,15 @@ tr.selected--primary td {
 .instance-detail-panel code {
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.instance-detail-panel--inspector {
+  background: color-mix(in srgb, var(--surface) 90%, var(--muted-bg));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  grid-template-columns: 1fr;
+  padding: 12px;
 }
 
 .instance-context-menu {
@@ -1744,6 +1737,23 @@ tr.selected--primary td {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.inspector__heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.inspector__heading h2 {
+  margin: 0;
+}
+
+.inspector button {
+  font-size: 12px;
+  min-height: 30px;
+  padding: 5px 9px;
 }
 
 .inspector-section {

@@ -304,6 +304,7 @@ pub struct ConsoleSessionRequest {
     pub ssh_key_path: Option<String>,
     pub rdp_username: Option<String>,
     pub rdp_password: Option<String>,
+    pub rdp_security_mode: Option<String>,
     pub terminal_cols: Option<u16>,
     pub terminal_rows: Option<u16>,
     pub width: Option<u32>,

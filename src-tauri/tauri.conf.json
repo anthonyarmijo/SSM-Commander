@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "SSM Commander",
-        "width": 1280,
-        "height": 860,
+        "width": 1120,
+        "height": 760,
         "minWidth": 1080,
         "minHeight": 720
       }

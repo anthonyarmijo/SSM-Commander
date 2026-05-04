@@ -1,6 +1,5 @@
 import {
   type CSSProperties,
-  Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -68,6 +67,7 @@ import type {
   InstanceSummary,
   ProfileCapability,
   ProfileCapabilityReport,
+  RdpSecurityMode,
   SessionRecord,
   SsoLoginAttempt,
   ThemeMode,
@@ -78,8 +78,14 @@ const DEFAULT_SIDEBAR_WIDTH = 270;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
 const SIDEBAR_KEYBOARD_STEP = 16;
-const INSTANCE_ACTION_COLUMN_WIDTH = 104;
 const INSTANCE_COLUMN_MENU_ID = "instances-column-menu";
+const RDP_SECURITY_MODE_OPTIONS: { value: RdpSecurityMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "nla", label: "NLA" },
+  { value: "nla-ext", label: "NLA-Ext" },
+  { value: "tls", label: "TLS" },
+  { value: "rdp", label: "RDP" },
+];
 const EMPTY_STATE_PROFILE_HELP =
   "The app will discover AWS CLI profiles already configured on your machine. Add one to validate access and unlock the Instances and Console views.";
 const SAVED_PROFILE_WORKSPACE_HELP =
@@ -330,7 +336,7 @@ function consoleOpenLabel(kind: ConsoleSessionKind): string {
 }
 
 function isLoadedInstancesNotice(message: string): boolean {
-  return /^Loaded \d+ instances using .+\.$/.test(message.trim());
+  return /^Loaded \d+ instances\.$/.test(message.trim());
 }
 
 export function App() {
@@ -352,10 +358,11 @@ export function App() {
   const [activeConsoleSessionId, setActiveConsoleSessionId] = useState("");
   const [isConsoleDialogOpen, setIsConsoleDialogOpen] = useState(false);
   const [consoleSessionKind, setConsoleSessionKind] = useState<ConsoleSessionKind>("shell");
-  const [instanceConnectionKind, setInstanceConnectionKind] = useState<ConsoleSessionKind>("shell");
+  const [instanceConnectionKind, setInstanceConnectionKind] = useState<ConsoleSessionKind>("rdp");
   const [consoleInstanceId, setConsoleInstanceId] = useState("");
   const [rdpUsername, setRdpUsername] = useState("");
   const [rdpPassword, setRdpPassword] = useState("");
+  const [rdpSecurityMode, setRdpSecurityMode] = useState<RdpSecurityMode>("auto");
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [query, setQuery] = useState("");
   const [sshUser, setSshUser] = useState("ec2-user");
@@ -390,6 +397,8 @@ export function App() {
   const activeProfileReady = Boolean(activeProfile && activeProfileState?.authStatus === "valid" && activeProfileRegion);
   const currentAwsContextKey = buildAwsContextKey(activeProfile, activeProfileRegion);
   const selectedInstance = instances.find((instance) => instance.instanceId === selectedInstanceId) ?? null;
+  const selectedInstanceDetailsExpanded = Boolean(selectedInstance && expandedInstanceDetailId === selectedInstance.instanceId);
+  const selectedInstanceDetailPanelId = selectedInstance ? `instance-details-${selectedInstance.instanceId}` : undefined;
   const activeConsoleSession =
     consoleSessions.find((session) => session.id === activeConsoleSessionId) ?? consoleSessions[0] ?? null;
   const selectedInstanceIdSet = useMemo(() => new Set(selectedInstanceIds), [selectedInstanceIds]);
@@ -403,9 +412,9 @@ export function App() {
     () => buildInstanceTableLayout(instanceTableVisibleColumns, instanceTableColumnWidths),
     [instanceTableColumnWidths, instanceTableVisibleColumns],
   );
-  const visibleInstanceColumnCount = visibleInstanceTableColumns.length + 1;
+  const visibleInstanceColumnCount = visibleInstanceTableColumns.length;
   const instanceTableMinWidth = useMemo(
-    () => visibleInstanceTableColumns.reduce((sum, column) => sum + column.width, INSTANCE_ACTION_COLUMN_WIDTH),
+    () => visibleInstanceTableColumns.reduce((sum, column) => sum + column.width, 0),
     [visibleInstanceTableColumns],
   );
   const contextMenuInstance = instanceContextMenu
@@ -1006,7 +1015,7 @@ export function App() {
       setSelectionAnchorId(normalizedSelection.anchorInstanceId);
       setLoadedInstanceContext(currentAwsContextKey);
       setAutoLoadAttemptedContext(currentAwsContextKey);
-      setNotice(`Loaded ${refreshed.length} instances using ${activeProfile}.`);
+      setNotice(`Loaded ${refreshed.length} instances.`);
     } catch (error) {
       if (instancesRequestIdRef.current !== requestId) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -1159,6 +1168,7 @@ export function App() {
         sshKeyPath: kind === "ssh" ? sshKeyPath || null : null,
         rdpUsername: kind === "rdp" ? rdpUsername || null : null,
         rdpPassword: kind === "rdp" ? rdpPassword || null : null,
+        rdpSecurityMode: kind === "rdp" ? rdpSecurityMode : null,
         terminalCols: 100,
         terminalRows: 30,
         width: 1280,
@@ -1913,6 +1923,10 @@ export function App() {
               <div>
                 <p className="eyebrow">Instances</p>
                 <h2 id="instances-title">Browse instances and manage EC2 power</h2>
+                <p className="instance-context-meta">
+                  Active profile: <code>{activeProfile || "Not selected"}</code>
+                  {activeProfileRegion ? <> · Region: <code>{activeProfileRegion}</code></> : null}
+                </p>
               </div>
               <div className="topbar-actions">
                 <button
@@ -1983,7 +1997,6 @@ export function App() {
 	                      {visibleInstanceTableColumns.map((column) => (
 	                        <col key={column.definition.id} style={{ width: `${column.width}px` }} />
 	                      ))}
-	                      <col style={{ width: `${INSTANCE_ACTION_COLUMN_WIDTH}px` }} />
 	                    </colgroup>
 	                    <thead>
 	                      <tr>
@@ -2015,9 +2028,6 @@ export function App() {
                             </div>
 	                          </th>
 	                        ))}
-	                        <th className="instance-row-actions-header" scope="col" style={{ width: `${INSTANCE_ACTION_COLUMN_WIDTH}px` }}>
-	                          <span className="visually-hidden">Actions</span>
-	                        </th>
 	                      </tr>
 	                    </thead>
                     <tbody>
@@ -2030,48 +2040,19 @@ export function App() {
                       )}
 	                      {visibleInstances.map((instance) => {
 	                        const isSelected = selectedInstanceIdSet.has(instance.instanceId);
-	                        const isExpanded = isSelected && expandedInstanceDetailId === instance.instanceId;
-	                        const detailId = `instance-details-${instance.instanceId}`;
 	
 	                        return (
-	                          <Fragment key={instance.instanceId}>
-	                            <tr
-	                              aria-selected={isSelected}
-	                              className={`${isSelected ? "selected" : ""} ${instance.instanceId === selectedInstanceId ? "selected selected--primary" : ""}`.trim()}
-	                              onClick={(event) => handleInstanceRowClick(event, instance.instanceId)}
-	                              onContextMenu={(event) => handleInstanceRowContextMenu(event, instance.instanceId)}
-	                            >
-	                              {visibleInstanceTableColumns.map((column) => (
-	                                <td key={`${instance.instanceId}-${column.definition.id}`}>{column.definition.renderCell(instance)}</td>
-	                              ))}
-	                              <td className="instance-row-actions">
-	                                {isSelected && (
-	                                  <button
-	                                    aria-controls={detailId}
-	                                    aria-expanded={isExpanded}
-	                                    className="button-ghost instance-details-toggle"
-	                                    onClick={(event) => handleInstanceDetailsToggle(event, instance.instanceId)}
-	                                    type="button"
-	                                  >
-	                                    {isExpanded ? "Hide" : "Details"}
-	                                  </button>
-	                                )}
-	                              </td>
-	                            </tr>
-	                            {isExpanded && (
-	                              <tr className="instance-detail-row">
-	                                <td className="instance-detail-cell" colSpan={visibleInstanceColumnCount}>
-	                                  <div className="instance-detail-panel detail-stack" id={detailId}>
-	                                    <div><span>Name</span><strong>{instance.name || "Unnamed"}</strong></div>
-	                                    <div><span>Instance ID</span><code>{instance.instanceId}</code></div>
-	                                    <div><span>State</span><strong>{instance.state}</strong></div>
-	                                    <div><span>Network</span><strong>{instance.privateIp || "No private IP"}</strong></div>
-	                                    <div><span>SSM</span><StatusPill label={instance.ssmStatus} tone={ssmTone(instance.ssmStatus)} /></div>
-	                                  </div>
-	                                </td>
-	                              </tr>
-	                            )}
-	                          </Fragment>
+	                          <tr
+	                            aria-selected={isSelected}
+	                            className={`${isSelected ? "selected" : ""} ${instance.instanceId === selectedInstanceId ? "selected selected--primary" : ""}`.trim()}
+	                            key={instance.instanceId}
+	                            onClick={(event) => handleInstanceRowClick(event, instance.instanceId)}
+	                            onContextMenu={(event) => handleInstanceRowContextMenu(event, instance.instanceId)}
+	                          >
+	                            {visibleInstanceTableColumns.map((column) => (
+	                              <td key={`${instance.instanceId}-${column.definition.id}`}>{column.definition.renderCell(instance)}</td>
+	                            ))}
+	                          </tr>
 	                        );
 	                      })}
                       {!showInitialInstancesLoader && visibleInstances.length === 0 && (
@@ -2085,15 +2066,34 @@ export function App() {
               </section>
 
 	              <aside className="inspector">
-	                <h2>{selectedInstanceIds.length > 1 ? "Primary Instance Actions" : "Instance Actions"}</h2>
+	                <div className="inspector__heading">
+	                  <h2>{selectedInstanceIds.length > 1 ? "Primary Instance Actions" : "Instance Actions"}</h2>
+	                  {selectedInstance && selectedInstanceDetailPanelId && (
+	                    <button
+	                      aria-controls={selectedInstanceDetailPanelId}
+	                      aria-expanded={selectedInstanceDetailsExpanded}
+	                      className="button-ghost instance-details-toggle"
+	                      onClick={(event) => handleInstanceDetailsToggle(event, selectedInstance.instanceId)}
+	                      type="button"
+	                    >
+	                      {selectedInstanceDetailsExpanded ? "Hide details" : "Details"}
+	                    </button>
+	                  )}
+	                </div>
 	                {selectedInstance ? (
 	                  <>
+	                    {selectedInstanceDetailsExpanded && selectedInstanceDetailPanelId && (
+	                      <div className="instance-detail-panel instance-detail-panel--inspector detail-stack" id={selectedInstanceDetailPanelId}>
+	                        <div><span>Name</span><strong>{selectedInstance.name || "Unnamed"}</strong></div>
+	                        <div><span>Instance ID</span><code>{selectedInstance.instanceId}</code></div>
+	                        <div><span>State</span><strong>{selectedInstance.state}</strong></div>
+	                        <div><span>Network</span><strong>{selectedInstance.privateIp || "No private IP"}</strong></div>
+	                        <div><span>SSM</span><StatusPill label={selectedInstance.ssmStatus} tone={ssmTone(selectedInstance.ssmStatus)} /></div>
+	                      </div>
+	                    )}
 	                    <div className="inspector-section">
 	                      <h3>Power actions</h3>
-                      <p className="muted">
-                        Active profile: <code>{activeProfile || "Not selected"}</code>
-                        {selectedInstanceIds.length > 1 ? ` · ${selectedInstanceIds.length} selected` : ""}
-                      </p>
+                      {selectedInstanceIds.length > 1 && <p className="muted">{selectedInstanceIds.length} selected</p>}
                       <div className="action-stack action-stack--inline">
                         <button
                           className="button-primary"
@@ -2122,11 +2122,11 @@ export function App() {
                           <p className="muted">These launch through the active validated profile and use the primary selected instance.</p>
                           <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
                             <button
-                              className={instanceConnectionKind === "shell" ? "active" : ""}
-                              onClick={() => setInstanceConnectionKind("shell")}
+                              className={instanceConnectionKind === "rdp" ? "active" : ""}
+                              onClick={() => setInstanceConnectionKind("rdp")}
                               type="button"
                             >
-                              Direct SSM (Shell)
+                              RDP
                             </button>
                             <button
                               className={instanceConnectionKind === "ssh" ? "active" : ""}
@@ -2136,11 +2136,11 @@ export function App() {
                               SSH
                             </button>
                             <button
-                              className={instanceConnectionKind === "rdp" ? "active" : ""}
-                              onClick={() => setInstanceConnectionKind("rdp")}
+                              className={instanceConnectionKind === "shell" ? "active" : ""}
+                              onClick={() => setInstanceConnectionKind("shell")}
                               type="button"
                             >
-                              RDP
+                              Direct SSM (Shell)
                             </button>
                           </div>
 
@@ -2169,6 +2169,14 @@ export function App() {
                               <label>
                                 RDP password
                                 <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                              </label>
+                              <label>
+                                RDP security
+                                <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
+                                  {RDP_SECURITY_MODE_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
                               </label>
                             </>
                           )}

@@ -71,6 +71,12 @@ guacd -f -b 127.0.0.1 -l 4822
 
 Packaged builds can use a bundled guacd sidecar. RDP credentials entered in Console are kept in memory only.
 
+For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
+for example `cyber\pkiadmin`. Embedded RDP splits that into Guacamole's separate
+`domain` and `username` parameters. The Instances page also includes an advanced
+RDP security selector with Auto, NLA, NLA-Ext, TLS, and RDP options; Auto leaves
+security negotiation to `guacd`.
+
 ## Raw Tauri Dev Mode
 
 Use raw Tauri dev mode when you want to manage Docker or native `guacd`

@@ -6,6 +6,7 @@ export type SessionKind = "shell" | "tunnel" | "rdp" | "ssh";
 export type SessionStatus = "starting" | "active" | "stopping" | "stopped" | "failed";
 export type ConsoleSessionKind = "shell" | "ssh" | "rdp";
 export type ConsoleRenderer = "xterm" | "guacamole";
+export type RdpSecurityMode = "auto" | "nla" | "nla-ext" | "tls" | "rdp";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type DiagnosticArea = "dependency" | "aws" | "process" | "launcher" | "security";
 export type ThemeMode = "system" | "light" | "dark";
@@ -148,6 +149,7 @@ export interface ConsoleSessionRequest {
   sshKeyPath?: string | null;
   rdpUsername?: string | null;
   rdpPassword?: string | null;
+  rdpSecurityMode?: RdpSecurityMode | null;
   terminalCols?: number | null;
   terminalRows?: number | null;
   width?: number | null;

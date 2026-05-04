@@ -136,33 +136,69 @@ struct GuacamoleBridgeState {
 
 #[derive(Clone)]
 struct RdpBridgeConfig {
+    session_id: String,
+    instance_id: String,
     local_port: u16,
     username: Option<String>,
+    domain: Option<String>,
     password: Option<String>,
+    security_mode: RdpSecurityMode,
     width: u32,
     height: u32,
     expires_at: Instant,
+    diagnostics: Diagnostics,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RdpCredentials {
+    username: Option<String>,
+    domain: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RdpSecurityMode {
+    Auto,
+    Nla,
+    NlaExt,
+    Tls,
+    Rdp,
 }
 
 impl GuacamoleBridge {
     pub fn register_rdp_connection(
         &self,
+        session_id: String,
+        instance_id: String,
         local_port: u16,
         username: Option<String>,
         password: Option<String>,
+        security_mode: Option<String>,
         width: Option<u32>,
         height: Option<u32>,
+        diagnostics: Diagnostics,
     ) -> Result<(String, String), String> {
         let listener_port = self.ensure_listener()?;
         let token = Uuid::new_v4().to_string();
+        let credentials = normalize_rdp_credentials(username);
+        let security_mode = normalize_rdp_security_mode(security_mode);
         let config = RdpBridgeConfig {
+            session_id,
+            instance_id,
             local_port,
-            username,
+            username: credentials.username,
+            domain: credentials.domain,
             password,
+            security_mode,
             width: width.unwrap_or(1280).max(640),
             height: height.unwrap_or(720).max(480),
             expires_at: Instant::now() + RDP_BRIDGE_TOKEN_TTL,
+            diagnostics,
         };
+
+        config.diagnostics.info(
+            DiagnosticArea::Launcher,
+            rdp_bridge_diagnostic_message(&config, guacd_version().as_deref()),
+        );
 
         let mut state = self
             .state
@@ -222,12 +258,24 @@ impl GuacamoleBridge {
 }
 
 pub fn guacd_is_available() -> bool {
-    std::process::Command::new("guacd")
+    guacd_version().is_some() || TcpStream::connect((GUACD_HOST, GUACD_PORT)).is_ok()
+}
+
+fn guacd_version() -> Option<String> {
+    let output = std::process::Command::new("guacd")
         .arg("-v")
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-        || TcpStream::connect((GUACD_HOST, GUACD_PORT)).is_ok()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        Some("available".to_string())
+    } else {
+        Some(version)
+    }
 }
 
 pub fn ssh_command_args(username: &str, port: u16, key_path: Option<&str>) -> Vec<String> {
@@ -448,14 +496,18 @@ pub fn rdp_console_session(
 
     let (status, bridge_url, connection_token, message) = if guacd_is_available() {
         match bridge.register_rdp_connection(
+            id.clone(),
+            request.instance_id.clone(),
             port,
             request
                 .rdp_username
                 .clone()
                 .or_else(|| request.username.clone()),
             request.rdp_password.clone(),
+            request.rdp_security_mode.clone(),
             request.width,
             request.height,
+            diagnostics.clone(),
         ) {
             Ok((url, token)) => (
                 SessionStatus::Active,
@@ -579,7 +631,19 @@ fn handle_guacamole_websocket(
 
     let mut guacd = TcpStream::connect((GUACD_HOST, GUACD_PORT))
         .map_err(|error| format!("Could not connect to guacd: {error}"))?;
-    start_guacd_rdp(&mut guacd, &config)?;
+    if let Err(error) = start_guacd_rdp(&mut guacd, &config) {
+        config.diagnostics.warning(
+            DiagnosticArea::Launcher,
+            format!(
+                "Embedded RDP guacd connection failed for sessionId={}, instanceId={}, securityMode={}: {}",
+                config.session_id,
+                config.instance_id,
+                rdp_security_label(config.security_mode),
+                error
+            ),
+        );
+        return Err(error);
+    }
 
     let uuid_instruction = encode_instruction("", &[Uuid::new_v4().to_string()]);
     websocket
@@ -600,12 +664,30 @@ fn handle_guacamole_websocket(
             Ok(0) => break,
             Ok(read) => {
                 let payload = String::from_utf8_lossy(&buffer[..read]).to_string();
+                if payload.contains(".error") || payload.to_lowercase().contains("wrong security") {
+                    config.diagnostics.warning(
+                        DiagnosticArea::Launcher,
+                        format!(
+                            "Embedded RDP guacd reported for sessionId={}, instanceId={}: {}",
+                            config.session_id, config.instance_id, payload
+                        ),
+                    );
+                }
                 if websocket.send(Message::Text(payload.into())).is_err() {
                     break;
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
+            Err(error) => {
+                config.diagnostics.warning(
+                    DiagnosticArea::Launcher,
+                    format!(
+                        "Embedded RDP guacd stream ended for sessionId={}, instanceId={}: {}",
+                        config.session_id, config.instance_id, error
+                    ),
+                );
+                break;
+            }
         }
 
         match websocket.read() {
@@ -620,7 +702,16 @@ fn handle_guacamole_websocket(
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
+            Err(error) => {
+                config.diagnostics.warning(
+                    DiagnosticArea::Launcher,
+                    format!(
+                        "Embedded RDP WebSocket stream ended for sessionId={}, instanceId={}: {}",
+                        config.session_id, config.instance_id, error
+                    ),
+                );
+                break;
+            }
         }
 
         thread::sleep(Duration::from_millis(8));
@@ -704,6 +795,110 @@ fn prune_expired_connections(state: &mut GuacamoleBridgeState) {
         .retain(|_, config| config.expires_at >= now);
 }
 
+fn normalize_rdp_credentials(username: Option<String>) -> RdpCredentials {
+    let Some(raw_username) = username else {
+        return RdpCredentials {
+            username: None,
+            domain: None,
+        };
+    };
+    let trimmed = raw_username.trim();
+    if trimmed.is_empty() {
+        return RdpCredentials {
+            username: None,
+            domain: None,
+        };
+    }
+
+    if let Some((domain, user)) = trimmed.split_once('\\') {
+        let domain = domain.trim();
+        let user = user.trim();
+        if !domain.is_empty() && !user.is_empty() {
+            return RdpCredentials {
+                username: Some(user.to_string()),
+                domain: Some(domain.to_string()),
+            };
+        }
+    }
+
+    RdpCredentials {
+        username: Some(trimmed.to_string()),
+        domain: None,
+    }
+}
+
+fn normalize_rdp_security_mode(value: Option<String>) -> RdpSecurityMode {
+    match value
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("nla") => RdpSecurityMode::Nla,
+        Some("nla-ext") | Some("nla_ext") | Some("nlaext") => RdpSecurityMode::NlaExt,
+        Some("tls") => RdpSecurityMode::Tls,
+        Some("rdp") => RdpSecurityMode::Rdp,
+        _ => RdpSecurityMode::Auto,
+    }
+}
+
+fn rdp_security_value(mode: RdpSecurityMode) -> &'static str {
+    match mode {
+        RdpSecurityMode::Auto => "",
+        RdpSecurityMode::Nla => "nla",
+        RdpSecurityMode::NlaExt => "nla-ext",
+        RdpSecurityMode::Tls => "tls",
+        RdpSecurityMode::Rdp => "rdp",
+    }
+}
+
+fn rdp_security_label(mode: RdpSecurityMode) -> &'static str {
+    match mode {
+        RdpSecurityMode::Auto => "auto",
+        RdpSecurityMode::Nla => "nla",
+        RdpSecurityMode::NlaExt => "nla-ext",
+        RdpSecurityMode::Tls => "tls",
+        RdpSecurityMode::Rdp => "rdp",
+    }
+}
+
+fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig, guacd_version: Option<&str>) -> String {
+    format!(
+        "Embedded RDP bridge parameters: sessionId={}, instanceId={}, localPort={}, username={}, domain={}, securityMode={}, guacd={}.",
+        config.session_id,
+        config.instance_id,
+        config.local_port,
+        if config.username.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+            "provided"
+        } else {
+            "missing"
+        },
+        if config.domain.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+            "provided"
+        } else {
+            "missing"
+        },
+        rdp_security_label(config.security_mode),
+        guacd_version.unwrap_or("unavailable"),
+    )
+}
+
+fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
+    match arg {
+        "hostname" => "127.0.0.1".to_string(),
+        "port" => config.local_port.to_string(),
+        "username" => config.username.clone().unwrap_or_default(),
+        "domain" => config.domain.clone().unwrap_or_default(),
+        "password" => config.password.clone().unwrap_or_default(),
+        "ignore-cert" => "true".to_string(),
+        "security" => rdp_security_value(config.security_mode).to_string(),
+        "resize-method" => "display-update".to_string(),
+        "enable-wallpaper" => "false".to_string(),
+        "enable-theming" => "false".to_string(),
+        _ => String::new(),
+    }
+}
+
 fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(), String> {
     stream
         .write_all(encode_instruction("select", &["rdp".to_string()]).as_bytes())
@@ -746,18 +941,7 @@ fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(
 
     let values = args
         .iter()
-        .map(|arg| match arg.as_str() {
-            "hostname" => "127.0.0.1".to_string(),
-            "port" => config.local_port.to_string(),
-            "username" => config.username.clone().unwrap_or_default(),
-            "password" => config.password.clone().unwrap_or_default(),
-            "ignore-cert" => "true".to_string(),
-            "security" => "any".to_string(),
-            "resize-method" => "display-update".to_string(),
-            "enable-wallpaper" => "false".to_string(),
-            "enable-theming" => "false".to_string(),
-            _ => String::new(),
-        })
+        .map(|arg| guacd_rdp_parameter_value(arg, config))
         .collect::<Vec<_>>();
 
     stream
@@ -855,9 +1039,13 @@ fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_instruction, parse_instruction, ssh_command_args, validate_guacamole_request,
-        GuacamoleBridge,
+        encode_instruction, guacd_rdp_parameter_value, normalize_rdp_credentials,
+        normalize_rdp_security_mode, parse_instruction, rdp_bridge_diagnostic_message,
+        rdp_security_value, ssh_command_args, validate_guacamole_request, GuacamoleBridge,
+        RdpBridgeConfig, RdpCredentials, RdpSecurityMode,
     };
+    use crate::diagnostics::Diagnostics;
+    use std::time::{Duration, Instant};
     use tungstenite::handshake::server::Request;
 
     #[test]
@@ -881,6 +1069,80 @@ mod tests {
     }
 
     #[test]
+    fn splits_windows_domain_qualified_rdp_username() {
+        assert_eq!(
+            normalize_rdp_credentials(Some("cyber\\pkiadmin".to_string())),
+            RdpCredentials {
+                username: Some("pkiadmin".to_string()),
+                domain: Some("cyber".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn leaves_plain_rdp_username_without_domain() {
+        assert_eq!(
+            normalize_rdp_credentials(Some("pkiadmin".to_string())),
+            RdpCredentials {
+                username: Some("pkiadmin".to_string()),
+                domain: None,
+            }
+        );
+    }
+
+    #[test]
+    fn omits_guacd_security_parameter_for_auto_rdp_mode() {
+        let config = rdp_config(
+            Some("pkiadmin"),
+            Some("cyber"),
+            Some("secret"),
+            RdpSecurityMode::Auto,
+        );
+
+        assert_eq!(guacd_rdp_parameter_value("domain", &config), "cyber");
+        assert_eq!(guacd_rdp_parameter_value("security", &config), "");
+    }
+
+    #[test]
+    fn passes_explicit_rdp_security_modes_to_guacd() {
+        for (mode, expected) in [
+            (RdpSecurityMode::Nla, "nla"),
+            (RdpSecurityMode::NlaExt, "nla-ext"),
+            (RdpSecurityMode::Tls, "tls"),
+            (RdpSecurityMode::Rdp, "rdp"),
+        ] {
+            let config = rdp_config(Some("pkiadmin"), Some("cyber"), Some("secret"), mode);
+
+            assert_eq!(rdp_security_value(mode), expected);
+            assert_eq!(guacd_rdp_parameter_value("security", &config), expected);
+        }
+    }
+
+    #[test]
+    fn normalizes_unknown_rdp_security_mode_to_auto() {
+        assert_eq!(
+            normalize_rdp_security_mode(Some("surprise".to_string())),
+            RdpSecurityMode::Auto
+        );
+    }
+
+    #[test]
+    fn omits_password_from_rdp_diagnostics() {
+        let config = rdp_config(
+            Some("pkiadmin"),
+            Some("cyber"),
+            Some("super-secret-password"),
+            RdpSecurityMode::Tls,
+        );
+        let message = rdp_bridge_diagnostic_message(&config, Some("guacd 1.6.0"));
+
+        assert!(message.contains("username=provided"));
+        assert!(message.contains("domain=provided"));
+        assert!(message.contains("securityMode=tls"));
+        assert!(!message.contains("super-secret-password"));
+    }
+
+    #[test]
     fn validates_local_guacamole_websocket_requests() {
         let token = "demo-token-bridge";
         let request = guacamole_request(&format!("/rdp?token={token}"), "http://127.0.0.1:1420");
@@ -899,7 +1161,17 @@ mod tests {
     fn removes_rdp_bridge_config_after_session_cleanup() {
         let bridge = GuacamoleBridge::default();
         let (_, token) = bridge
-            .register_rdp_connection(3390, Some("demo".to_string()), Some("secret".to_string()), None, None)
+            .register_rdp_connection(
+                "test-session".to_string(),
+                "i-test".to_string(),
+                3390,
+                Some("demo".to_string()),
+                Some("secret".to_string()),
+                Some("tls".to_string()),
+                None,
+                None,
+                Diagnostics::default(),
+            )
             .unwrap();
 
         assert!(bridge
@@ -924,5 +1196,26 @@ mod tests {
             .header("Sec-WebSocket-Protocol", "guacamole")
             .body(())
             .unwrap()
+    }
+
+    fn rdp_config(
+        username: Option<&str>,
+        domain: Option<&str>,
+        password: Option<&str>,
+        security_mode: RdpSecurityMode,
+    ) -> RdpBridgeConfig {
+        RdpBridgeConfig {
+            session_id: "test-session".to_string(),
+            instance_id: "i-test".to_string(),
+            local_port: 3390,
+            username: username.map(str::to_string),
+            domain: domain.map(str::to_string),
+            password: password.map(str::to_string),
+            security_mode,
+            width: 1280,
+            height: 720,
+            expires_at: Instant::now() + Duration::from_secs(60),
+            diagnostics: Diagnostics::default(),
+        }
     }
 }
