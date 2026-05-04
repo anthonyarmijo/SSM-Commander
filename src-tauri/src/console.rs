@@ -180,7 +180,7 @@ impl GuacamoleBridge {
         width: Option<u32>,
         height: Option<u32>,
         diagnostics: Diagnostics,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, String), String> {
         let listener_port = self.ensure_listener()?;
         let token = Uuid::new_v4().to_string();
         let credentials = normalize_rdp_credentials(username);
@@ -201,10 +201,10 @@ impl GuacamoleBridge {
             diagnostics,
         };
 
-        config.diagnostics.info(
-            DiagnosticArea::Launcher,
-            rdp_bridge_diagnostic_message(&config),
-        );
+        let diagnostic_message = rdp_bridge_diagnostic_message(&config);
+        config
+            .diagnostics
+            .info(DiagnosticArea::Launcher, diagnostic_message.clone());
 
         let mut state = self
             .state
@@ -213,7 +213,11 @@ impl GuacamoleBridge {
         prune_expired_connections(&mut state);
         state.connections.insert(token.clone(), config);
 
-        Ok((format!("ws://127.0.0.1:{listener_port}/rdp"), token))
+        Ok((
+            format!("ws://127.0.0.1:{listener_port}/rdp"),
+            token,
+            diagnostic_message,
+        ))
     }
 
     pub fn remove_connection(&self, token: &str) {
@@ -515,11 +519,13 @@ pub fn rdp_console_session(
             request.height,
             diagnostics.clone(),
         ) {
-            Ok((url, token)) => (
+            Ok((url, token, diagnostic_message)) => (
                 SessionStatus::Active,
                 Some(url),
                 Some(token),
-                Some("Embedded RDP bridge connected to local guacd.".to_string()),
+                Some(format!(
+                    "Embedded RDP bridge connected to local guacd. {diagnostic_message}"
+                )),
             ),
             Err(error) => (SessionStatus::Failed, None, None, Some(error)),
         }
@@ -1207,7 +1213,7 @@ mod tests {
     #[test]
     fn removes_rdp_bridge_config_after_session_cleanup() {
         let bridge = GuacamoleBridge::default();
-        let (_, token) = bridge
+        let (_, token, _) = bridge
             .register_rdp_connection(
                 "test-session".to_string(),
                 "i-test".to_string(),

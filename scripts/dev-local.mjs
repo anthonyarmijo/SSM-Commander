@@ -12,6 +12,7 @@ const guacdStopTimeoutMs = 10_000;
 let tauriProcess;
 let startedContainer = false;
 let shuttingDown = false;
+let guacdMonitor;
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -95,6 +96,29 @@ function removeNamedContainer() {
   return true;
 }
 
+function containerIsRunning() {
+  const running = docker(["ps", "-q", "--filter", `name=^/${containerName}$`]);
+  return running.status === 0 && Boolean(running.stdout.trim());
+}
+
+function startGuacdMonitor() {
+  if (guacdMonitor) {
+    clearInterval(guacdMonitor);
+  }
+
+  guacdMonitor = setInterval(() => {
+    if (shuttingDown || !startedContainer) {
+      return;
+    }
+
+    if (!containerIsRunning()) {
+      console.error(`${containerName} is no longer running. Embedded RDP requires guacd on ${guacdHost}:${guacdPort}.`);
+      startedContainer = false;
+      void shutdown(1);
+    }
+  }, 2_000);
+}
+
 async function assertGuacdPortFree() {
   const lsof = run("lsof", ["-nP", `-iTCP:${guacdPort}`, "-sTCP:LISTEN"]);
   if (lsof.status === 0 && lsof.stdout.trim()) {
@@ -117,7 +141,6 @@ async function startGuacd() {
     [
       "run",
       "-d",
-      "--rm",
       ...platformArgs,
       "--name",
       containerName,
@@ -136,9 +159,15 @@ async function startGuacd() {
     `Timed out waiting for guacd to listen on ${guacdHost}:${guacdPort}.`,
   );
   console.log(`guacd is ready on ${guacdHost}:${guacdPort}.`);
+  startGuacdMonitor();
 }
 
 async function stopGuacd() {
+  if (guacdMonitor) {
+    clearInterval(guacdMonitor);
+    guacdMonitor = undefined;
+  }
+
   if (!startedContainer) {
     return;
   }
@@ -155,6 +184,11 @@ async function stopGuacd() {
   });
   if (stopped.status !== 0) {
     console.error(`Could not stop ${containerName}; you may need to run docker rm -f ${containerName}.`);
+    return;
+  }
+  const removed = docker(["rm", containerName], { stdio: "inherit" });
+  if (removed.status !== 0) {
+    console.error(`Could not remove ${containerName}; it will be replaced on the next npm start.`);
   }
   startedContainer = false;
 }

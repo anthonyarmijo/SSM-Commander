@@ -2767,9 +2767,10 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
     const element = client.getDisplay().getElement();
     display.appendChild(element);
 
-    client.onerror = (status: { message?: string }) => {
-      setError(status.message || "RDP console disconnected.");
-    };
+	    client.onerror = (status: { message?: string }) => {
+	      const message = status.message || "RDP console disconnected.";
+	      setError(session.message ? `${message} ${session.message}` : message);
+	    };
     client.connect(`token=${encodeURIComponent(session.connectionToken)}`);
 
     const mouse = new Guacamole.Mouse(element);

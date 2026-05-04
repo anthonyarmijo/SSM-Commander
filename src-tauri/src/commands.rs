@@ -8,9 +8,12 @@ use crate::models::{
 };
 use crate::{aws_cli, console, dependencies, platform, ports, preferences, sessions, AppState};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{async_runtime, AppHandle, Manager, State};
 use uuid::Uuid;
+
+const CONSOLE_TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(8);
+const CONSOLE_TUNNEL_SETTLE_DELAY: Duration = Duration::from_millis(1_200);
 
 #[tauri::command]
 pub fn check_environment(state: State<'_, AppState>) -> Result<EnvironmentState, String> {
@@ -440,6 +443,12 @@ pub fn start_console_session(
         crate::models::ConsoleSessionKind::Rdp => SessionKind::Rdp,
     };
     let tunnel_record = start_tunnel(&state, tunnel_request, tunnel_kind)?;
+    let tunnel_port = tunnel_record
+        .tunnel
+        .as_ref()
+        .map(|tunnel| tunnel.local_port)
+        .ok_or_else(|| "Console tunnel was not created".to_string())?;
+    wait_for_console_tunnel(&state, tunnel_port)?;
 
     let managed_session = match request.kind {
         crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions are created before tunnel setup"),
@@ -554,6 +563,28 @@ pub fn get_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticEvent
 pub fn open_logs_folder() -> Result<(), String> {
     let path = preferences::logs_dir()?;
     platform::open_path(&path)
+}
+
+fn wait_for_console_tunnel(state: &State<'_, AppState>, local_port: u16) -> Result<(), String> {
+    let started_at = Instant::now();
+    while started_at.elapsed() < CONSOLE_TUNNEL_READY_TIMEOUT {
+        if !ports::is_port_available(local_port) {
+            state.diagnostics.info(
+                DiagnosticArea::Process,
+                format!("SSM tunnel listener is ready on local port {local_port}"),
+            );
+            thread::sleep(CONSOLE_TUNNEL_SETTLE_DELAY);
+            return Ok(());
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let message = format!("Timed out waiting for SSM tunnel listener on local port {local_port}");
+    state
+        .diagnostics
+        .error(DiagnosticArea::Process, message.clone());
+    Err(message)
 }
 
 fn start_tunnel(
