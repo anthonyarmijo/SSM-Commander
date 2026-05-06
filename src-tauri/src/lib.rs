@@ -1,6 +1,7 @@
 mod aws_cli;
 mod commands;
 mod console;
+mod credentials;
 mod dependencies;
 mod diagnostics;
 mod models;
@@ -11,6 +12,7 @@ mod process_registry;
 mod sessions;
 
 use console::{ConsoleRegistry, GuacamoleBridge};
+use credentials::CredentialStore;
 use diagnostics::Diagnostics;
 use models::SsoLoginAttempt;
 use process_registry::ProcessRegistry;
@@ -22,6 +24,7 @@ pub struct AppState {
     diagnostics: Diagnostics,
     processes: Mutex<ProcessRegistry>,
     consoles: Mutex<ConsoleRegistry>,
+    credentials: Mutex<CredentialStore>,
     guacamole_bridge: GuacamoleBridge,
     sso_login_attempts: Mutex<HashMap<String, SsoLoginAttempt>>,
 }
@@ -32,6 +35,7 @@ impl Default for AppState {
             diagnostics: Diagnostics::default(),
             processes: Mutex::new(ProcessRegistry::default()),
             consoles: Mutex::new(ConsoleRegistry::default()),
+            credentials: Mutex::new(CredentialStore::default()),
             guacamole_bridge: GuacamoleBridge::default(),
             sso_login_attempts: Mutex::new(HashMap::new()),
         }
@@ -54,6 +58,14 @@ pub fn run() {
             commands::get_sso_login_attempt,
             commands::load_preferences,
             commands::save_preferences,
+            commands::credential_store_status,
+            commands::unlock_credentials,
+            commands::lock_credentials,
+            commands::list_credentials,
+            commands::get_credential,
+            commands::upsert_credential,
+            commands::delete_credential,
+            commands::set_default_credential,
             commands::discover_instances,
             commands::get_ssm_readiness,
             commands::start_instances,

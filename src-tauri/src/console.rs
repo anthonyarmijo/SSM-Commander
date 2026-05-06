@@ -1,13 +1,16 @@
 use crate::diagnostics::Diagnostics;
 use crate::models::{
-    ConsoleOutputEvent, ConsoleRenderer, ConsoleSessionKind, ConsoleSessionRecord,
-    ConsoleSessionRequest, DiagnosticArea, DiagnosticSeverity, SessionRecord, SessionStatus,
+    ConsoleOutputEvent, ConsoleRenderer, ConsoleSessionEndedEvent, ConsoleSessionKind,
+    ConsoleSessionRecord, ConsoleSessionRequest, DiagnosticArea, DiagnosticSeverity, SessionRecord,
+    SessionStatus,
 };
 use chrono::Utc;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,6 +21,7 @@ use tungstenite::{accept_hdr, Message};
 use uuid::Uuid;
 
 const CONSOLE_OUTPUT_EVENT: &str = "console-output";
+const CONSOLE_SESSION_ENDED_EVENT: &str = "console-session-ended";
 const GUACD_HOST: &str = "127.0.0.1";
 const GUACD_PORT: u16 = 4822;
 const DEFAULT_RDP_TARGET_HOST: &str = "127.0.0.1";
@@ -34,7 +38,8 @@ pub struct ManagedConsoleSession {
     tunnel_session_id: Option<String>,
     pty_child: Option<Box<dyn Child + Send>>,
     pty_master: Option<Box<dyn MasterPty + Send>>,
-    pty_writer: Option<Box<dyn Write + Send>>,
+    pty_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
+    temp_files: Vec<PathBuf>,
 }
 
 impl ConsoleRegistry {
@@ -63,6 +68,9 @@ impl ConsoleRegistry {
             .pty_writer
             .as_mut()
             .ok_or_else(|| "This console session does not accept terminal input.".to_string())?;
+        let mut writer = writer
+            .lock()
+            .map_err(|_| "Console session writer is unavailable".to_string())?;
         writer
             .write_all(data.as_bytes())
             .and_then(|_| writer.flush())
@@ -105,6 +113,9 @@ impl ConsoleRegistry {
         if let Some(mut child) = session.pty_child.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        for path in &session.temp_files {
+            let _ = fs::remove_file(path);
         }
 
         session.record.status = SessionStatus::Stopped;
@@ -307,6 +318,64 @@ pub fn ssh_command_args(username: &str, port: u16, key_path: Option<&str>) -> Ve
     args
 }
 
+fn write_temp_ssh_key(private_key_content: &str) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!("ssm-commander-{}.key", Uuid::new_v4()));
+    fs::write(&path, private_key_content)
+        .map_err(|error| format!("Could not write temporary SSH key: {error}"))?;
+    set_private_key_permissions(&path)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn set_private_key_permissions(path: &PathBuf) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("Could not secure temporary SSH key: {error}"))
+}
+
+#[cfg(not(unix))]
+fn set_private_key_permissions(_path: &PathBuf) -> Result<(), String> {
+    Ok(())
+}
+
+fn contains_ssh_password_prompt(output_tail: &str) -> bool {
+    output_tail
+        .rsplit(['\n', '\r'])
+        .find(|line| !line.is_empty())
+        .unwrap_or(output_tail)
+        .trim_end()
+        .to_ascii_lowercase()
+        .ends_with("password:")
+}
+
+fn trim_ssh_prompt_tail(output_tail: &mut String) {
+    const MAX_PROMPT_TAIL_LEN: usize = 512;
+    if output_tail.len() <= MAX_PROMPT_TAIL_LEN {
+        return;
+    }
+    let keep_from = output_tail.len() - MAX_PROMPT_TAIL_LEN;
+    *output_tail = output_tail.split_off(keep_from);
+}
+
+fn emit_console_session_ended(
+    app: &AppHandle,
+    session_id: String,
+    kind: ConsoleSessionKind,
+    instance_id: String,
+    message: String,
+) {
+    let _ = app.emit(
+        CONSOLE_SESSION_ENDED_EVENT,
+        ConsoleSessionEndedEvent {
+            session_id,
+            kind,
+            instance_id,
+            message,
+        },
+    );
+}
+
 pub fn ssh_console_session(
     app: AppHandle,
     request: &ConsoleSessionRequest,
@@ -330,29 +399,53 @@ pub fn ssh_console_session(
             pixel_height: 0,
         })
         .map_err(|error| format!("Could not open embedded terminal: {error}"))?;
+    let temp_key_path = request
+        .ssh_private_key_content
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(write_temp_ssh_key)
+        .transpose()?;
+    let ssh_key_path = temp_key_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .or_else(|| request.ssh_key_path.clone());
 
     let mut command = CommandBuilder::new("ssh");
-    for arg in ssh_command_args(username, port, request.ssh_key_path.as_deref()) {
+    for arg in ssh_command_args(username, port, ssh_key_path.as_deref()) {
         command.arg(arg);
     }
 
-    let child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|error| format!("Could not start embedded SSH: {error}"))?;
+    let child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            if let Some(path) = temp_key_path.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            return Err(format!("Could not start embedded SSH: {error}"));
+        }
+    };
     let mut reader = pair
         .master
         .try_clone_reader()
         .map_err(|error| format!("Could not read embedded SSH output: {error}"))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| format!("Could not write embedded SSH input: {error}"))?;
+    let writer =
+        Arc::new(Mutex::new(pair.master.take_writer().map_err(|error| {
+            format!("Could not write embedded SSH input: {error}")
+        })?));
     drop(pair.slave);
 
     let event_session_id = id.clone();
+    let ended_session_id = id.clone();
+    let ended_instance_id = request.instance_id.clone();
+    let ssh_password = request
+        .ssh_password
+        .clone()
+        .filter(|password| !password.is_empty());
+    let password_writer = writer.clone();
     thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
+        let mut prompt_tail = String::new();
+        let mut password_sent = false;
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
@@ -365,10 +458,30 @@ pub fn ssh_console_session(
                             data,
                         },
                     );
+                    if let Some(password) = ssh_password.as_deref() {
+                        prompt_tail.push_str(&String::from_utf8_lossy(&buffer[..read]));
+                        trim_ssh_prompt_tail(&mut prompt_tail);
+                        if !password_sent && contains_ssh_password_prompt(&prompt_tail) {
+                            if let Ok(mut writer) = password_writer.lock() {
+                                let _ = writer.write_all(password.as_bytes());
+                                let _ = writer.write_all(b"\n");
+                                let _ = writer.flush();
+                                password_sent = true;
+                                prompt_tail.clear();
+                            }
+                        }
+                    }
                 }
                 Err(_) => break,
             }
         }
+        emit_console_session_ended(
+            &app,
+            ended_session_id,
+            ConsoleSessionKind::Ssh,
+            ended_instance_id.clone(),
+            format!("SSH session for {ended_instance_id} disconnected."),
+        );
     });
 
     let record = ConsoleSessionRecord {
@@ -393,6 +506,7 @@ pub fn ssh_console_session(
         pty_child: Some(child),
         pty_master: Some(pair.master),
         pty_writer: Some(writer),
+        temp_files: temp_key_path.into_iter().collect(),
     })
 }
 
@@ -426,10 +540,9 @@ pub fn shell_console_session(
         .master
         .try_clone_reader()
         .map_err(|error| format!("Could not read embedded SSM shell output: {error}"))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| format!("Could not write embedded SSM shell input: {error}"))?;
+    let writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(|error| {
+        format!("Could not write embedded SSM shell input: {error}")
+    })?));
     drop(pair.slave);
 
     let event_session_id = id.clone();
@@ -475,6 +588,7 @@ pub fn shell_console_session(
         pty_child: Some(child),
         pty_master: Some(pair.master),
         pty_writer: Some(writer),
+        temp_files: Vec::new(),
     })
 }
 
@@ -569,6 +683,7 @@ pub fn rdp_console_session(
         pty_child: None,
         pty_master: None,
         pty_writer: None,
+        temp_files: Vec::new(),
     })
 }
 
@@ -598,6 +713,7 @@ pub fn failed_rdp_console_session(
         pty_child: None,
         pty_master: None,
         pty_writer: None,
+        temp_files: Vec::new(),
     }
 }
 
@@ -1064,11 +1180,11 @@ fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_instruction, guacd_rdp_parameter_value, normalize_rdp_credentials,
-        normalize_rdp_security_mode, normalize_rdp_target_host, parse_instruction,
-        rdp_bridge_diagnostic_message, rdp_security_value, ssh_command_args,
-        validate_guacamole_request, GuacamoleBridge, RdpBridgeConfig, RdpCredentials,
-        RdpSecurityMode,
+        contains_ssh_password_prompt, encode_instruction, guacd_rdp_parameter_value,
+        normalize_rdp_credentials, normalize_rdp_security_mode, normalize_rdp_target_host,
+        parse_instruction, rdp_bridge_diagnostic_message, rdp_security_value, ssh_command_args,
+        validate_guacamole_request, write_temp_ssh_key, GuacamoleBridge, RdpBridgeConfig,
+        RdpCredentials, RdpSecurityMode,
     };
     use crate::diagnostics::Diagnostics;
     use std::time::{Duration, Instant};
@@ -1082,6 +1198,34 @@ mod tests {
         assert!(args.contains(&"22022".to_string()));
         assert!(args.contains(&"/tmp/key.pem".to_string()));
         assert!(args.contains(&"ec2-user@127.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn writes_pasted_ssh_key_to_temp_file_for_open_ssh_args() {
+        let private_key =
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n";
+        let path = write_temp_ssh_key(private_key).unwrap();
+        let path_text = path.to_string_lossy().to_string();
+        let args = ssh_command_args("ec2-user", 22022, Some(&path_text));
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), private_key);
+        assert!(args.contains(&path_text));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("BEGIN OPENSSH PRIVATE KEY")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn detects_ssh_password_prompts() {
+        assert!(contains_ssh_password_prompt(
+            "(jhak_scan@127.0.0.1) Password: "
+        ));
+        assert!(contains_ssh_password_prompt("Warning...\r\nPassword:"));
+        assert!(!contains_ssh_password_prompt(
+            "Last login: Wed May 6 17:17:55 2026"
+        ));
     }
 
     #[test]

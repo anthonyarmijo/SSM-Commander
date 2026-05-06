@@ -1,9 +1,10 @@
 use crate::models::{
     AwsProfile, CallerIdentity, ConnectRequest, ConsoleSessionRecord, ConsoleSessionRequest,
-    DiagnosticArea, DiagnosticEvent, EnvironmentState, InstancePowerActionResult,
-    InstancePowerRequest, InstanceSummary, PortAllocationSource, PortForwardRequest,
-    ProfileCapabilityReport, RdpSessionRequest, RegionOption, SessionKind, SessionRecord,
-    SshSessionRequest, SsoLoginAttempt, SsoLoginAttemptStatus, TunnelListenerStatus,
+    CredentialKind, CredentialRecord, CredentialStoreStatus, CredentialSummary, DiagnosticArea,
+    DiagnosticEvent, EnvironmentState, InstancePowerActionResult, InstancePowerRequest,
+    InstanceSummary, PortAllocationSource, PortForwardRequest, ProfileCapabilityReport,
+    RdpSessionRequest, RegionOption, SessionKind, SessionRecord, SshSessionRequest,
+    SsoLoginAttempt, SsoLoginAttemptStatus, TunnelListenerStatus, UpsertCredentialRequest,
     UserPreferences,
 };
 use crate::{aws_cli, console, dependencies, platform, ports, preferences, sessions, AppState};
@@ -87,10 +88,9 @@ pub fn probe_profile_capabilities(
             "Completed capability probes with warnings",
         );
     } else {
-        state.diagnostics.info(
-            DiagnosticArea::Aws,
-            "Completed capability probes",
-        );
+        state
+            .diagnostics
+            .info(DiagnosticArea::Aws, "Completed capability probes");
     }
 
     Ok(report)
@@ -129,10 +129,9 @@ pub fn start_sso_login(
         .map_err(|_| "SSO login attempt registry is unavailable".to_string())?
         .insert(attempt.id.clone(), attempt.clone());
 
-    state.diagnostics.info(
-        DiagnosticArea::Aws,
-        "Started AWS SSO login",
-    );
+    state
+        .diagnostics
+        .info(DiagnosticArea::Aws, "Started AWS SSO login");
 
     let attempt_id = attempt.id.clone();
     thread::spawn(move || {
@@ -204,6 +203,94 @@ pub fn load_preferences() -> Result<UserPreferences, String> {
 #[tauri::command]
 pub fn save_preferences(preferences: UserPreferences) -> Result<(), String> {
     preferences::save_preferences(&preferences)
+}
+
+#[tauri::command]
+pub fn credential_store_status(
+    state: State<'_, AppState>,
+) -> Result<CredentialStoreStatus, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .status()
+}
+
+#[tauri::command]
+pub fn unlock_credentials(
+    state: State<'_, AppState>,
+    passphrase: String,
+) -> Result<CredentialStoreStatus, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .unlock(&passphrase)
+}
+
+#[tauri::command]
+pub fn lock_credentials(state: State<'_, AppState>) -> Result<CredentialStoreStatus, String> {
+    let mut credentials = state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?;
+    credentials.lock();
+    credentials.status()
+}
+
+#[tauri::command]
+pub fn list_credentials(state: State<'_, AppState>) -> Result<Vec<CredentialSummary>, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .list()
+}
+
+#[tauri::command]
+pub fn get_credential(
+    state: State<'_, AppState>,
+    credential_id: String,
+) -> Result<CredentialRecord, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .get(&credential_id)
+}
+
+#[tauri::command]
+pub fn upsert_credential(
+    state: State<'_, AppState>,
+    request: UpsertCredentialRequest,
+) -> Result<CredentialSummary, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .upsert(request)
+}
+
+#[tauri::command]
+pub fn delete_credential(state: State<'_, AppState>, credential_id: String) -> Result<(), String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .delete(&credential_id)
+}
+
+#[tauri::command]
+pub fn set_default_credential(
+    state: State<'_, AppState>,
+    kind: CredentialKind,
+    credential_id: Option<String>,
+) -> Result<CredentialStoreStatus, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .set_default(kind, credential_id)
 }
 
 #[tauri::command]
@@ -423,7 +510,9 @@ pub fn start_console_session(
     }
 
     let tunnel_request = match request.kind {
-        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions do not use tunnels"),
+        crate::models::ConsoleSessionKind::Shell => {
+            unreachable!("Shell console sessions do not use tunnels")
+        }
         crate::models::ConsoleSessionKind::Ssh => sessions::ssh::request(
             &request.profile,
             &request.region,
@@ -438,7 +527,9 @@ pub fn start_console_session(
         ),
     };
     let tunnel_kind = match request.kind {
-        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions do not use tunnels"),
+        crate::models::ConsoleSessionKind::Shell => {
+            unreachable!("Shell console sessions do not use tunnels")
+        }
         crate::models::ConsoleSessionKind::Ssh => SessionKind::Ssh,
         crate::models::ConsoleSessionKind::Rdp => SessionKind::Rdp,
     };
@@ -451,7 +542,9 @@ pub fn start_console_session(
     wait_for_console_tunnel(&state, tunnel_port)?;
 
     let managed_session = match request.kind {
-        crate::models::ConsoleSessionKind::Shell => unreachable!("Shell console sessions are created before tunnel setup"),
+        crate::models::ConsoleSessionKind::Shell => {
+            unreachable!("Shell console sessions are created before tunnel setup")
+        }
         crate::models::ConsoleSessionKind::Ssh => {
             console::ssh_console_session(app, &request, tunnel_record)
         }
