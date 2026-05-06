@@ -9,7 +9,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -155,6 +156,7 @@ impl CredentialStore {
             return self.status_at(path);
         }
 
+        validate_new_passphrase_strength(passphrase)?;
         let header = CryptoHeader {
             kdf: new_kdf_params()?,
         };
@@ -259,13 +261,9 @@ impl CredentialStore {
             .as_ref()
             .ok_or_else(|| "Credential store encryption header is unavailable.".to_string())?;
         let encrypted = encrypt_vault(vault, key, &header.kdf)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("Could not create credentials directory: {error}"))?;
-        }
         let contents = serde_json::to_string_pretty(&encrypted)
             .map_err(|error| format!("Could not serialize encrypted credentials: {error}"))?;
-        fs::write(path, contents).map_err(|error| format!("Could not write credentials: {error}"))
+        write_private_file(path, contents.as_bytes(), "credentials")
     }
 
     fn unlocked_vault(&self) -> Result<&CredentialVault, String> {
@@ -510,6 +508,158 @@ fn validate_passphrase(passphrase: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_new_passphrase_strength(passphrase: &str) -> Result<(), String> {
+    if passphrase.chars().count() < 12 {
+        return Err("Choose a master passphrase with at least 12 characters.".to_string());
+    }
+
+    let classes = [
+        passphrase.chars().any(|ch| ch.is_ascii_lowercase()),
+        passphrase.chars().any(|ch| ch.is_ascii_uppercase()),
+        passphrase.chars().any(|ch| ch.is_ascii_digit()),
+        passphrase
+            .chars()
+            .any(|ch| !ch.is_ascii_alphanumeric() && !ch.is_whitespace()),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+
+    if classes < 3 {
+        return Err(
+            "Choose a master passphrase with at least 3 of: lowercase, uppercase, number, symbol."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Could not resolve {label} directory."))?;
+    create_private_directory(parent, label)?;
+    let tmp_path = parent.join(format!(
+        ".{}-{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(label),
+        Uuid::new_v4()
+    ));
+
+    write_private_file_at(&tmp_path, contents, label)?;
+    if let Err(error) = fs::rename(&tmp_path, path) {
+        #[cfg(windows)]
+        {
+            if path.exists() {
+                fs::remove_file(path).map_err(|remove_error| {
+                    let _ = fs::remove_file(&tmp_path);
+                    format!("Could not replace {label}: {remove_error}")
+                })?;
+                fs::rename(&tmp_path, path).map_err(|rename_error| {
+                    let _ = fs::remove_file(&tmp_path);
+                    format!("Could not write {label}: {rename_error}")
+                })?;
+            } else {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(format!("Could not write {label}: {error}"));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(format!("Could not write {label}: {error}"));
+        }
+    }
+
+    set_private_file_permissions(path, label)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path, label: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::create_dir_all(path)
+        .map_err(|error| format!("Could not create {label} directory: {error}"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("Could not secure {label} directory: {error}"))
+}
+
+#[cfg(windows)]
+fn create_private_directory(path: &Path, label: &str) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|error| format!("Could not create {label} directory: {error}"))?;
+    secure_windows_path(path, label)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn create_private_directory(path: &Path, label: &str) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|error| format!("Could not create {label} directory: {error}"))
+}
+
+#[cfg(unix)]
+fn write_private_file_at(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("Could not create {label}: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("Could not write {label}: {error}"))
+}
+
+#[cfg(not(unix))]
+fn write_private_file_at(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Could not create {label}: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("Could not write {label}: {error}"))
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path, label: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("Could not secure {label}: {error}"))
+}
+
+#[cfg(windows)]
+fn set_private_file_permissions(path: &Path, label: &str) -> Result<(), String> {
+    secure_windows_path(path, label)
+}
+
+#[cfg(windows)]
+fn secure_windows_path(path: &Path, label: &str) -> Result<(), String> {
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .map_err(|_| format!("Could not resolve Windows user for {label} ACLs."))?;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .status()
+        .map_err(|error| format!("Could not secure {label} ACLs: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Could not secure {label} ACLs."))
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn set_private_file_permissions(_path: &Path, _label: &str) -> Result<(), String> {
+    Ok(())
+}
+
 fn trimmed_required(value: &str, label: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -556,7 +706,7 @@ mod tests {
         let path = dir.path().join("credentials.json");
         let mut store = CredentialStore::default();
 
-        store.unlock_at(&path, "correct horse").unwrap();
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
         let summary = store
             .upsert_at(&path, ssh_password_request("Lab SSH", "secret-password"))
             .unwrap();
@@ -570,7 +720,7 @@ mod tests {
         assert!(wrong.unlock_at(&path, "wrong").is_err());
 
         let mut reopened = CredentialStore::default();
-        reopened.unlock_at(&path, "correct horse").unwrap();
+        reopened.unlock_at(&path, "Correct horse 42!").unwrap();
         let credential = reopened.get(&summary.id).unwrap();
         assert_eq!(credential.password.as_deref(), Some("secret-password"));
     }
@@ -581,7 +731,7 @@ mod tests {
         let path = dir.path().join("credentials.json");
         let mut store = CredentialStore::default();
 
-        store.unlock_at(&path, "correct horse").unwrap();
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
         let summary = store
             .upsert_at(&path, ssh_password_request("Lab SSH", "secret-password"))
             .unwrap();
@@ -594,5 +744,38 @@ mod tests {
             Some(summary.id.as_str())
         );
         assert_eq!(store.list().unwrap()[0].is_default, true);
+    }
+
+    #[test]
+    fn rejects_weak_passphrases_for_new_vaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let mut store = CredentialStore::default();
+
+        let error = store.unlock_at(&path, "correct horse").unwrap_err();
+
+        assert!(error.contains("at least 3"));
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_credentials_with_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("credentials.json");
+        let mut store = CredentialStore::default();
+
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
+
+        let dir_mode = fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
     }
 }

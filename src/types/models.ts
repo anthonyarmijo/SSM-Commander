@@ -151,8 +151,10 @@ export interface ConsoleSessionRequest {
   sshPassword?: string | null;
   sshKeyPath?: string | null;
   sshPrivateKeyContent?: string | null;
+  sshCredentialId?: string | null;
   rdpUsername?: string | null;
   rdpPassword?: string | null;
+  rdpCredentialId?: string | null;
   rdpSecurityMode?: RdpSecurityMode | null;
   terminalCols?: number | null;
   terminalRows?: number | null;

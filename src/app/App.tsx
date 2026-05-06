@@ -58,6 +58,7 @@ import {
 import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacement";
 import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
 import { buildConsoleSessionRequest } from "./consoleSessionRequest";
+import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormState } from "./credentialForm";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
 import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
@@ -89,9 +90,9 @@ import type {
   UserPreferences,
 } from "../types/models";
 
-const DEFAULT_SIDEBAR_WIDTH = 270;
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 420;
+const DEFAULT_SIDEBAR_WIDTH = 190;
+const MIN_SIDEBAR_WIDTH = 164;
+const MAX_SIDEBAR_WIDTH = 260;
 const SIDEBAR_KEYBOARD_STEP = 16;
 const INSTANCE_COLUMN_MENU_ID = "instances-column-menu";
 const RDP_SECURITY_MODE_OPTIONS: { value: RdpSecurityMode; label: string }[] = [
@@ -108,35 +109,11 @@ const SAVED_PROFILE_WORKSPACE_HELP =
 type ResolvedTheme = "light" | "dark";
 type ProfileStateMap = Record<string, SavedProfileState>;
 type InstanceContextMenuState = { instanceId: string; x: number; y: number } | null;
-type CredentialFormState = {
-  id: string;
-  label: string;
-  kind: CredentialKind;
-  username: string;
-  password: string;
-  domain: string;
-  sshAuthMode: SshAuthMode;
-  sshKeyPath: string;
-  sshPrivateKeyContent: string;
-  rdpSecurityMode: RdpSecurityMode;
-};
 const technicalInputProps = {
   autoCapitalize: "none",
   autoCorrect: "off",
   spellCheck: false,
 } as const;
-const emptyCredentialForm: CredentialFormState = {
-  id: "",
-  label: "",
-  kind: "ssh",
-  username: "",
-  password: "",
-  domain: "",
-  sshAuthMode: "password",
-  sshKeyPath: "",
-  sshPrivateKeyContent: "",
-  rdpSecurityMode: "auto",
-};
 
 function buildAwsContextKey(profile: string, region: string): string {
   if (!profile || !region) return "";
@@ -252,6 +229,56 @@ function HidePanelIcon() {
   return (
     <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
       <path d="m7 6 6 6-6 6M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function NavIcon({ view }: { view: ActiveView }) {
+  return (
+    <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
+      {view === "home" && (
+        <>
+          <path d="M4 11.5 12 4l8 7.5" />
+          <path d="M6.5 10.5V20h11v-9.5" />
+        </>
+      )}
+      {view === "initialize" && (
+        <>
+          <circle cx="12" cy="12" r="3.5" />
+          <path d="M12 2.5v3M12 18.5v3M4.8 4.8l2.1 2.1M17.1 17.1l2.1 2.1M2.5 12h3M18.5 12h3M4.8 19.2l2.1-2.1M17.1 6.9l2.1-2.1" />
+        </>
+      )}
+      {view === "credentials" && (
+        <>
+          <rect height="10" rx="2" width="14" x="5" y="10" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2.5" />
+        </>
+      )}
+      {view === "instances" && (
+        <>
+          <rect height="6" rx="1.5" width="14" x="5" y="4" />
+          <rect height="6" rx="1.5" width="14" x="5" y="14" />
+          <path d="M8 7h.01M8 17h.01M12 7h4M12 17h4" />
+        </>
+      )}
+      {view === "console" && (
+        <>
+          <rect height="14" rx="2" width="18" x="3" y="5" />
+          <path d="m8 10 3 2-3 2M13 15h4" />
+        </>
+      )}
+      {view === "activity" && (
+        <>
+          <path d="M4 17V7M9 17V4M14 17v-6M19 17V9" />
+          <path d="M3 20h18" />
+        </>
+      )}
+      {view === "logs" && (
+        <>
+          <path d="M7 4h10l3 3v13H7z" />
+          <path d="M17 4v4h4M10 11h7M10 15h7" />
+        </>
+      )}
     </svg>
   );
 }
@@ -518,6 +545,7 @@ export function App() {
   const showInstancesRefreshing = isInstancesLoading && instances.length > 0;
   const showInitialInstancesLoader = isInstancesLoading && instances.length === 0;
   const appShellStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
+  const isMenuSelectionRetained = activeView === "instances" && Boolean(selectedInstance);
   const shouldShowHomeNotice = !["Ready.", "Environment is ready."].includes(notice.trim());
   const hasInstancesNoticeError = activeProfileState?.authStatus === "error";
   const hasInstancesNoticeWarning = activeProfileState?.authStatus === "expired";
@@ -790,6 +818,7 @@ export function App() {
     const status = await invokeCommand<CredentialStoreStatus>("lock_credentials");
     setCredentialStatus(status);
     setCredentials([]);
+    setCredentialForm(clearCredentialFormSecrets());
     setSelectedSshCredentialId("");
     setSelectedRdpCredentialId("");
     setSshPrivateKeyContent("");
@@ -888,27 +917,27 @@ export function App() {
   async function applyCredentialToConnection(kind: CredentialKind, credentialId: string) {
     if (kind === "ssh") {
       setSelectedSshCredentialId(credentialId);
+      setSshPassword("");
+      setSshPrivateKeyContent("");
+      setSshKeyPath("");
     } else {
       setSelectedRdpCredentialId(credentialId);
+      setRdpPassword("");
     }
-    setSshPrivateKeyContent("");
     if (!credentialId) return;
 
-    try {
-      const credential = await invokeCommand<CredentialRecord>("get_credential", { credentialId });
-      if (credential.kind === "ssh") {
-        setSshUser(credential.username || "ec2-user");
-        setSshPassword(credential.password || "");
-        setSshKeyPath(credential.sshKeyPath || "");
-        setSshPrivateKeyContent(credential.sshPrivateKeyContent || "");
-      } else {
-        setRdpUsername(credential.username || "");
-        setRdpDomain(credential.domain || "");
-        setRdpPassword(credential.password || "");
-        setRdpSecurityMode(credential.rdpSecurityMode || "auto");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+    const credential = credentials.find((candidate) => candidate.id === credentialId);
+    if (!credential || credential.kind !== kind) {
+      setNotice("Selected credential is unavailable. Unlock credentials and try again.");
+      return;
+    }
+
+    if (credential.kind === "ssh") {
+      setSshUser(credential.username || "ec2-user");
+    } else {
+      setRdpUsername(credential.username || "");
+      setRdpDomain(credential.domain || "");
+      setRdpSecurityMode((credential.rdpSecurityMode as RdpSecurityMode | null) || "auto");
     }
   }
 
@@ -1496,9 +1525,11 @@ export function App() {
         sshPassword,
         sshKeyPath,
         sshPrivateKeyContent,
+        sshCredentialId: selectedSshCredentialId,
         rdpUsername,
         rdpDomain,
         rdpPassword,
+        rdpCredentialId: selectedRdpCredentialId,
         rdpSecurityMode,
         terminalCols: 100,
         terminalRows: 30,
@@ -1604,7 +1635,7 @@ export function App() {
     window.addEventListener("mouseup", handleMouseUp);
   }
 
-  function handleInstanceRowClick(event: ReactMouseEvent<HTMLTableRowElement>, instanceId: string) {
+  function handleInstanceRowClick(event: ReactMouseEvent<HTMLElement>, instanceId: string) {
     const nextSelection = updateInstanceSelection({
       selectedInstanceIds,
       primarySelectedInstanceId: selectedInstanceId,
@@ -1629,7 +1660,7 @@ export function App() {
     setExpandedInstanceDetailId((current) => current === instanceId ? "" : instanceId);
   }
 
-  function handleInstanceRowContextMenu(event: ReactMouseEvent<HTMLTableRowElement>, instanceId: string) {
+  function handleInstanceRowContextMenu(event: ReactMouseEvent<HTMLElement>, instanceId: string) {
     event.preventDefault();
     event.stopPropagation();
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - 190));
@@ -1884,6 +1915,12 @@ export function App() {
   }, [activeProfileReady, activeView]);
 
   useEffect(() => {
+    if (activeView !== "credentials") {
+      setCredentialForm(clearCredentialFormSecrets());
+    }
+  }, [activeView]);
+
+  useEffect(() => {
     if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     void listen<ConsoleSessionEndedEvent>("console-session-ended", (event) => {
@@ -1961,7 +1998,10 @@ export function App() {
   }, [isColumnMenuOpen]);
 
   return (
-    <div className={`app-shell ${isResizingSidebar || isResizingTableColumn ? "app-shell--resizing" : ""}`} style={appShellStyle}>
+    <div
+      className={`app-shell ${isMenuSelectionRetained ? "app-shell--resource-focused" : ""} ${isResizingSidebar || isResizingTableColumn ? "app-shell--resizing" : ""}`.trim()}
+      style={appShellStyle}
+    >
       <aside className="sidebar" aria-label="Primary navigation">
         <nav className="side-nav" aria-label="Workspace sections">
           {navItems.map((item) => {
@@ -1976,7 +2016,8 @@ export function App() {
                 title={isDisabled ? "Validate an active AWS profile in Initialize to open this section." : undefined}
                 type="button"
               >
-                {item.label}
+                <NavIcon view={item.view} />
+                <span>{item.label}</span>
               </button>
             );
           })}
@@ -2553,20 +2594,16 @@ export function App() {
         )}
 
         {activeView === "instances" && (
-          <section className="view view--instances" aria-labelledby="instances-title">
-            <header className="topbar">
-              <div>
-                <p className="eyebrow">Instances</p>
-                <h2 id="instances-title">Browse instances and manage EC2 power</h2>
-                <p className="instance-context-meta">
-                  Active profile: <code>{activeProfile || "Not selected"}</code>
-                  {activeProfileRegion ? <> · Region: <code>{activeProfileRegion}</code></> : null}
-                </p>
-              </div>
-              <div className="topbar-actions">
+          <section className="view view--instances resource-workspace" aria-labelledby="instances-title">
+            <section className="resource-pane resource-pane--browser" aria-label="Instances browser">
+              <header className="resource-pane__header">
+                <div>
+                  <h2 id="instances-title">Instances</h2>
+                  <p>{visibleInstances.length} shown · {instances.length} total</p>
+                </div>
                 <button
                   aria-label="Refresh instances from AWS"
-                  className="button-primary icon-button"
+                  className="button-secondary icon-button glass-icon-button"
                   disabled={!activeProfileReady || isInstancesLoading}
                   onClick={() => void refreshInstances("manual")}
                   title="Refresh instances from AWS"
@@ -2575,396 +2612,288 @@ export function App() {
                   <RefreshIcon />
                   <span className="visually-hidden">Refresh instances from AWS</span>
                 </button>
+              </header>
+
+              <div className="resource-pane__tools">
+                <input onChange={(event) => setQuery(event.target.value)} placeholder="Search name, id, tag, IP, VPC..." value={query} />
+                <button
+                  className="button-ghost resource-sort-button"
+                  onClick={() => handleInstanceColumnSort("name")}
+                  type="button"
+                >
+                  <SortIcon direction={instanceSort?.columnId === "name" ? instanceSort.direction : "none"} />
+                  <span>Name</span>
+                </button>
               </div>
-            </header>
 
-            <div className={instancesNoticeClassName}>
-              {notice}
-            </div>
+              <div className={instancesNoticeClassName}>
+                {notice}
+              </div>
 
-            <div className="content-grid">
-              <section className="instance-area">
-                <div className="table-tools">
-                  <input onChange={(event) => setQuery(event.target.value)} placeholder="Search by name, id, tag, IP, VPC..." value={query} />
-                  <div className="table-tools__actions">
-                    <div className="column-menu" ref={columnMenuRef}>
-                      <button
-                        aria-controls={INSTANCE_COLUMN_MENU_ID}
-                        aria-expanded={isColumnMenuOpen}
-                        className="button-secondary"
-                        onClick={() => setIsColumnMenuOpen((current) => !current)}
-                        type="button"
-                      >
-                        Columns
-                      </button>
-                      {isColumnMenuOpen && (
-                        <div className="column-menu__popover" id={INSTANCE_COLUMN_MENU_ID} role="menu" aria-label="Choose visible instance columns">
-                          {instanceTableColumns.map((column) => {
-                            const checked = instanceTableVisibleColumns.includes(column.id);
-                            const disableToggle = checked && instanceTableVisibleColumns.length === 1;
-                            return (
-                              <label className={`column-menu__option ${disableToggle ? "column-menu__option--disabled" : ""}`} key={column.id}>
-                                <input
-                                  checked={checked}
-                                  disabled={disableToggle}
-                                  onChange={(event) => setInstanceColumnVisibility(column.id, event.target.checked)}
-                                  type="checkbox"
-                                />
-                                <span>{column.label}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                    <span>{visibleInstances.length} instances</span>
-                    {selectedInstanceIds.length > 1 && <span>{selectedInstanceIds.length} selected</span>}
-                  </div>
-                </div>
-                {selectedInstance && (
-                  <div className="selected-instance-actions" aria-label={`Selected instance actions for ${selectedInstance.instanceId}`}>
-                    <div className="selected-instance-actions__summary">
-                      <strong>{selectedInstance.name || selectedInstance.instanceId}</strong>
-                      <span>{selectedInstance.instanceId}</span>
-                    </div>
-                    <button
-                      aria-expanded={shouldShowInstanceActionsOverlay}
-                      className="button-secondary selected-instance-actions__details"
-                      onClick={showInstanceActionsOverlay}
-                      type="button"
-                    >
-                      <HidePanelIcon />
-                      <span>Details</span>
-                    </button>
+              <div className="resource-list" aria-busy={isInstancesLoading} role="listbox" aria-label="Instances">
+                {showInstancesRefreshing && (
+                  <div className="resource-list__loading">
+                    <LoadingIndicator label="Loading instances from AWS..." />
                   </div>
                 )}
-                <div className="table-frame" aria-busy={isInstancesLoading}>
-                  {showInstancesRefreshing && (
-                    <div className="table-frame__loading-overlay">
-                      <LoadingIndicator label="Loading instances from AWS..." />
-                    </div>
-                  )}
-                  <table style={{ minWidth: `${instanceTableMinWidth}px` }}>
-	                    <colgroup>
-	                      {visibleInstanceTableColumns.map((column) => (
-	                        <col key={column.definition.id} style={{ width: `${column.width}px` }} />
-	                      ))}
-                        <col className="instance-table__fill-column" />
-	                    </colgroup>
-	                    <thead>
-	                      <tr>
-                        {visibleInstanceTableColumns.map((column) => (
-                          <th
-                            aria-sort={ariaSortValue(column.definition.id)}
-                            key={column.definition.id}
-                            style={{ width: `${column.width}px`, minWidth: `${column.definition.minWidth}px` }}
-                          >
-                            <div className="table-header-cell">
-                              <button
-                                className="table-header-button"
-                                onClick={() => handleInstanceColumnSort(column.definition.id)}
-                                type="button"
-                              >
-                                <span>{column.definition.label}</span>
-                                <SortIcon
-                                  direction={instanceSort?.columnId === column.definition.id ? instanceSort.direction : "none"}
-                                />
-                              </button>
-                              {column.definition.resizable && (
-                                <span
-                                  aria-hidden="true"
-                                  className="column-resize-handle"
-                                  title={`Resize ${column.definition.label} column`}
-                                  onMouseDown={(event) => startInstanceColumnResize(event, column.definition.id)}
-                                />
-                              )}
-                            </div>
-	                          </th>
-	                        ))}
-                          <th aria-hidden="true" className="instance-table__fill-cell" />
-	                      </tr>
-	                    </thead>
-                    <tbody>
-                      {showInitialInstancesLoader && (
-                        <tr>
-                          <td className="empty-cell empty-cell--loading" colSpan={visibleInstanceColumnCount}>
-                            <LoadingIndicator label="Loading instances from AWS..." />
-                          </td>
-                        </tr>
-                      )}
-	                      {visibleInstances.map((instance) => {
-	                        const isSelected = selectedInstanceIdSet.has(instance.instanceId);
-	
-	                        return (
-	                          <tr
-	                            aria-selected={isSelected}
-	                            className={`${isSelected ? "selected" : ""} ${instance.instanceId === selectedInstanceId ? "selected selected--primary" : ""}`.trim()}
-	                            key={instance.instanceId}
-	                            onClick={(event) => handleInstanceRowClick(event, instance.instanceId)}
-	                            onContextMenu={(event) => handleInstanceRowContextMenu(event, instance.instanceId)}
-	                          >
-	                            {visibleInstanceTableColumns.map((column) => (
-	                              <td key={`${instance.instanceId}-${column.definition.id}`}>{column.definition.renderCell(instance)}</td>
-	                            ))}
-                              <td aria-hidden="true" className="instance-table__fill-cell" />
-	                          </tr>
-	                        );
-	                      })}
-                      {!showInitialInstancesLoader && visibleInstances.length === 0 && (
-                        <tr>
-                          <td className="empty-cell" colSpan={visibleInstanceColumnCount}>No instances loaded yet.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+                {showInitialInstancesLoader && (
+                  <div className="resource-empty resource-empty--loading">
+                    <LoadingIndicator label="Loading instances from AWS..." />
+                  </div>
+                )}
+                {!showInitialInstancesLoader && visibleInstances.map((instance) => {
+                  const isSelected = selectedInstanceIdSet.has(instance.instanceId);
+                  const isPrimary = instance.instanceId === selectedInstanceId;
+                  const platformLabel = instance.platform || "Unknown";
+                  const isRunning = instance.state.toLowerCase() === "running";
 
-              {shouldShowInstanceActionsOverlay && selectedInstance && (
-	              <aside
-                  aria-label={`Instance actions for ${selectedInstance.instanceId}`}
-                  aria-modal="false"
-                  className="inspector instance-actions-overlay"
-                  role="dialog"
-                >
-	                <div className="inspector__heading">
-	                  <h2>{selectedInstanceIds.length > 1 ? "Primary Instance Actions" : "Instance Actions"}</h2>
-                    <div className="instance-actions-overlay__heading-actions">
-                      {selectedInstanceDetailPanelId && (
-                        <button
-                          aria-controls={selectedInstanceDetailPanelId}
-                          aria-expanded={selectedInstanceDetailsExpanded}
-                          className="button-ghost instance-details-toggle"
-                          onClick={(event) => handleInstanceDetailsToggle(event, selectedInstance.instanceId)}
-                          type="button"
-                        >
-                          {selectedInstanceDetailsExpanded ? "Hide details" : "Details"}
-                        </button>
-                      )}
+                  return (
+                    <button
+                      aria-selected={isSelected}
+                      className={`resource-row ${isSelected ? "resource-row--selected" : ""} ${isPrimary ? "resource-row--primary" : ""}`.trim()}
+                      key={instance.instanceId}
+                      onClick={(event) => handleInstanceRowClick(event, instance.instanceId)}
+                      onContextMenu={(event) => handleInstanceRowContextMenu(event, instance.instanceId)}
+                      role="option"
+                      type="button"
+                    >
+                      <span className={`resource-row__icon ${isRunning ? "resource-row__icon--running" : "resource-row__icon--stopped"}`}>
+                        <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                          <rect height="6" rx="1.5" width="14" x="5" y="5" />
+                          <rect height="6" rx="1.5" width="14" x="5" y="13" />
+                          <path d="M8 8h.01M8 16h.01M12 8h4M12 16h4" />
+                        </svg>
+                      </span>
+                      <span className="resource-row__copy">
+                        <strong>{instance.name || instance.instanceId}</strong>
+                        <span>{instance.instanceId}</span>
+                      </span>
+                      <span className="resource-row__meta">
+                        <StatusPill label={instance.state} tone={isRunning ? "good" : instance.state === "stopped" ? "neutral" : "warn"} />
+                        <span>{platformLabel}</span>
+                        <span>{instance.privateIp || "No private IP"}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+                {!showInitialInstancesLoader && visibleInstances.length === 0 && (
+                  <div className="resource-empty">
+                    <strong>No instances found</strong>
+                    <span>{query ? "Adjust the search query or refresh AWS." : "Refresh AWS to load resources."}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <aside className="resource-pane resource-pane--inspector" aria-label="Instance actions and configuration">
+              {selectedInstance ? (
+                <>
+                  <header className="inspector-hero">
+                    <div className={`inspector-hero__icon ${selectedInstance.state === "running" ? "inspector-hero__icon--running" : ""}`}>
+                      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                        <rect height="6" rx="1.5" width="14" x="5" y="5" />
+                        <rect height="6" rx="1.5" width="14" x="5" y="13" />
+                        <path d="M8 8h.01M8 16h.01M12 8h4M12 16h4" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h2>{selectedInstance.name || selectedInstance.instanceId}</h2>
+                      <p>{selectedInstance.instanceId}</p>
+                    </div>
+                  </header>
+
+                  <div className="inspector-card detail-stack">
+                    <div><span>Name</span><strong>{selectedInstance.name || "Unnamed"}</strong></div>
+                    <div><span>Profile</span><strong>{activeProfile || "Not selected"}</strong></div>
+                    <div><span>Region</span><strong>{activeProfileRegion || "No region"}</strong></div>
+                    <div><span>State</span><StatusPill label={selectedInstance.state} tone={selectedInstance.state === "running" ? "good" : selectedInstance.state === "stopped" ? "neutral" : "warn"} /></div>
+                    <div><span>SSM</span><StatusPill label={selectedInstance.ssmStatus} tone={ssmTone(selectedInstance.ssmStatus)} /></div>
+                    <div><span>Private IP</span><strong>{selectedInstance.privateIp || "No private IP"}</strong></div>
+                    {selectedInstance.publicIp && <div><span>Public IP</span><strong>{selectedInstance.publicIp}</strong></div>}
+                    {selectedInstance.vpcId && <div><span>VPC</span><strong>{selectedInstance.vpcId}</strong></div>}
+                    {selectedInstance.subnetId && <div><span>Subnet</span><strong>{selectedInstance.subnetId}</strong></div>}
+                  </div>
+
+                  {selectedInstance.tags.length > 0 && (
+                    <section className="inspector-section">
+                      <h3>Tags</h3>
+                      <div className="inspector-table">
+                        {selectedInstance.tags.slice(0, 5).map((tag) => (
+                          <div key={`${selectedInstance.instanceId}-${tag.key}`}>
+                            <span>{tag.key}</span>
+                            <strong>{tag.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  <section className="inspector-section">
+                    <h3>Power</h3>
+                    {selectedInstanceIds.length > 1 && <p className="muted">{selectedInstanceIds.length} selected</p>}
+                    <div className="action-stack action-stack--inline">
                       <button
-                        aria-label="Hide instance actions"
-                        className="button-ghost icon-button instance-actions-overlay__hide"
-                        onClick={dismissInstanceActionsOverlay}
-                        title="Hide instance actions"
-                        type="button"
+                        className="button-primary"
+                        disabled={!activeProfileReady || isPowerActionBusy || startSelection.eligibleInstanceIds.length === 0}
+                        onClick={() => void runInstancePowerAction("start")}
+                        title={!activeProfileReady ? "Validate the active profile first." : startSelection.eligibleInstanceIds.length === 0 ? "No selected instances can be started." : undefined}
                       >
-                        <HidePanelIcon />
+                        {isPowerActionBusy ? "Working..." : selectedInstanceIds.length > 1 ? `Start (${startSelection.eligibleInstanceIds.length})` : "Start"}
+                      </button>
+                      <button
+                        disabled={!activeProfileReady || isPowerActionBusy || stopSelection.eligibleInstanceIds.length === 0}
+                        onClick={() => void runInstancePowerAction("stop")}
+                        title={!activeProfileReady ? "Validate the active profile first." : stopSelection.eligibleInstanceIds.length === 0 ? "No selected instances can be stopped." : undefined}
+                      >
+                        {isPowerActionBusy ? "Working..." : selectedInstanceIds.length > 1 ? `Stop (${stopSelection.eligibleInstanceIds.length})` : "Stop"}
                       </button>
                     </div>
-	                </div>
-	                  <>
-	                    {selectedInstanceDetailsExpanded && selectedInstanceDetailPanelId && (
-	                      <div className="instance-detail-panel instance-detail-panel--inspector detail-stack" id={selectedInstanceDetailPanelId}>
-	                        <div><span>Name</span><strong>{selectedInstance.name || "Unnamed"}</strong></div>
-	                        <div><span>Instance ID</span><code>{selectedInstance.instanceId}</code></div>
-	                        <div><span>State</span><strong>{selectedInstance.state}</strong></div>
-	                        <div><span>Network</span><strong>{selectedInstance.privateIp || "No private IP"}</strong></div>
-	                        <div><span>SSM</span><StatusPill label={selectedInstance.ssmStatus} tone={ssmTone(selectedInstance.ssmStatus)} /></div>
-	                      </div>
-	                    )}
-	                    <div className="inspector-section">
-	                      <h3>Power actions</h3>
-                      {selectedInstanceIds.length > 1 && <p className="muted">{selectedInstanceIds.length} selected</p>}
-                      <div className="action-stack action-stack--inline">
-                        <button
-                          className="button-primary"
-                          disabled={!activeProfileReady || isPowerActionBusy || startSelection.eligibleInstanceIds.length === 0}
-                          onClick={() => void runInstancePowerAction("start")}
-                          title={!activeProfileReady ? "Validate the active profile first." : startSelection.eligibleInstanceIds.length === 0 ? "No selected instances can be started." : undefined}
-                        >
-                          {isPowerActionBusy ? "Working..." : selectedInstanceIds.length > 1 ? `Start selected (${startSelection.eligibleInstanceIds.length})` : "Start instance"}
-                        </button>
-                        <button
-                          disabled={!activeProfileReady || isPowerActionBusy || stopSelection.eligibleInstanceIds.length === 0}
-                          onClick={() => void runInstancePowerAction("stop")}
-                          title={!activeProfileReady ? "Validate the active profile first." : stopSelection.eligibleInstanceIds.length === 0 ? "No selected instances can be stopped." : undefined}
-                        >
-                          {isPowerActionBusy ? "Working..." : selectedInstanceIds.length > 1 ? `Stop selected (${stopSelection.eligibleInstanceIds.length})` : "Stop instance"}
-                        </button>
-                      </div>
-                    </div>
+                  </section>
 
-                    <div className="inspector-section connection-actions">
-                      <h3>Connection actions</h3>
-                      {selectedInstance.state !== "running" ? (
-                        <p className="resource-offline">Resource offline</p>
-                      ) : (
-                        <>
-                          <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
-                            <button
-                              className={instanceConnectionKind === "rdp" ? "active" : ""}
-                              onClick={() => setInstanceConnectionKind("rdp")}
-                              type="button"
-                            >
-                              RDP
-                            </button>
-                            <button
-                              className={instanceConnectionKind === "ssh" ? "active" : ""}
-                              onClick={() => setInstanceConnectionKind("ssh")}
-                              type="button"
-                            >
-                              SSH
-                            </button>
-                            <button
-                              className={instanceConnectionKind === "shell" ? "active" : ""}
-                              onClick={() => setInstanceConnectionKind("shell")}
-                              type="button"
-                            >
-                              Direct SSM (Shell)
-                            </button>
-                          </div>
+                  <section className="inspector-section connection-actions">
+                    <h3>Connection</h3>
+                    {selectedInstance.state !== "running" ? (
+                      <p className="resource-offline">Resource offline</p>
+                    ) : (
+                      <>
+                        <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
+                          <button className={instanceConnectionKind === "rdp" ? "active" : ""} onClick={() => setInstanceConnectionKind("rdp")} type="button">RDP</button>
+                          <button className={instanceConnectionKind === "ssh" ? "active" : ""} onClick={() => setInstanceConnectionKind("ssh")} type="button">SSH</button>
+                          <button className={instanceConnectionKind === "shell" ? "active" : ""} onClick={() => setInstanceConnectionKind("shell")} type="button">Shell</button>
+                        </div>
 
-                          {instanceCredentialKind && (
-                            credentialStatus?.unlocked && instanceCredentialOptions.length > 0 ? (
-                              <label>
-                                Saved credential
-                                <select
-                                  onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)}
-                                  value={selectedInstanceCredentialId}
-                                >
-                                  <option value="">Manual entry</option>
-                                  {instanceCredentialOptions.map((credential) => (
-                                    <option key={credential.id} value={credential.id}>
-                                      {credential.isDefault ? `${credential.label} (default)` : credential.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            ) : (
-                              <button
-                                className="button-secondary"
-                                onClick={() => setActiveView("credentials")}
-                                type="button"
-                              >
-                                Create {credentialKindLabel(instanceCredentialKind)} credential
-                              </button>
-                            )
-                          )}
+                        {instanceCredentialKind && (
+                          credentialStatus?.unlocked && instanceCredentialOptions.length > 0 ? (
+                            <label>
+                              Saved credential
+                              <select onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)} value={selectedInstanceCredentialId}>
+                                <option value="">Manual entry</option>
+                                {instanceCredentialOptions.map((credential) => (
+                                  <option key={credential.id} value={credential.id}>
+                                    {credential.isDefault ? `${credential.label} (default)` : credential.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <button className="button-secondary" onClick={() => setActiveView("credentials")} type="button">
+                              Create {credentialKindLabel(instanceCredentialKind)} credential
+                            </button>
+                          )
+                        )}
 
-                          {instanceConnectionKind === "ssh" && (
-                            <>
-                              <label>
-                                SSH user
-                                <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
-                              </label>
-                              <label>
-                                SSH password
-                                <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
-                              </label>
-                              <div className="field-group">
-                                <span className="field-group__label">SSH key path</span>
-                                <div className="path-input-row">
-                                  <input {...technicalInputProps} onChange={(event) => {
-                                    setSshKeyPath(event.target.value);
-                                    setSshPrivateKeyContent("");
-                                  }} placeholder="Optional" value={sshKeyPath} />
-                                  <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
-                                </div>
+                        {instanceConnectionKind === "ssh" && (
+                          <>
+                            <label>
+                              SSH user
+                              <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
+                            </label>
+                            <label>
+                              SSH password
+                              <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
+                            </label>
+                            <div className="field-group">
+                              <span className="field-group__label">SSH key path</span>
+                              <div className="path-input-row">
+                                <input {...technicalInputProps} onChange={(event) => {
+                                  setSshKeyPath(event.target.value);
+                                  setSshPrivateKeyContent("");
+                                }} placeholder="Optional" value={sshKeyPath} />
+                                <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
                               </div>
-                            </>
-                          )}
+                            </div>
+                          </>
+                        )}
 
-                          {instanceConnectionKind === "rdp" && (
-                            <>
-                              <label>
-                                RDP username
-                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
-                              </label>
-                              <label>
-                                RDP domain
-                                <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
-                              </label>
-                              <label>
-                                RDP password
-                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
-                              </label>
-                              <label>
-                                RDP security
-                                <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
-                                  {RDP_SECURITY_MODE_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </>
-                          )}
+                        {instanceConnectionKind === "rdp" && (
+                          <>
+                            <label>
+                              RDP username
+                              <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                            </label>
+                            <label>
+                              RDP domain
+                              <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
+                            </label>
+                            <label>
+                              RDP password
+                              <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                            </label>
+                            <label>
+                              RDP security
+                              <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
+                                {RDP_SECURITY_MODE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </>
+                        )}
 
-                          {instanceConnectionKind !== "shell" && (
-                            <>
-                              <label className="instance-port-toggle">
-                                <input
-                                  checked={isInstancePortMappingEnabled}
-                                  onChange={(event) => setIsInstancePortMappingEnabled(event.target.checked)}
-                                  type="checkbox"
-                                />
-                                <span>User-defined port-mapping?</span>
+                        {instanceConnectionKind !== "shell" && (
+                          <>
+                            <label className="instance-port-toggle">
+                              <input checked={isInstancePortMappingEnabled} onChange={(event) => setIsInstancePortMappingEnabled(event.target.checked)} type="checkbox" />
+                              <span>User-defined port mapping</span>
+                            </label>
+                            {isInstancePortMappingEnabled && (
+                              <label>
+                                Local port
+                                <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="49152" value={customLocalPort} />
                               </label>
-                              {isInstancePortMappingEnabled && (
-                                <label>
-                                  Local port
-                                  <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="49152" value={customLocalPort} />
-                                </label>
-                              )}
-                            </>
-                          )}
+                            )}
+                          </>
+                        )}
 
-                          <div className="action-stack connection-actions__buttons">
-                            <button
-                              className="button-primary"
-                              disabled={!canConnectToInstance}
-                              onClick={() => void startConsoleSession(instanceConnectionKind, selectedInstance.instanceId, getInstanceActionsLocalPort())}
-                              title={connectionDisabledTitle}
-                              type="button"
-                            >
-                              {consoleOpenLabel(instanceConnectionKind)}
-	                            </button>
-	                            <button
-	                              disabled={!canConnectToInstance}
-	                              onClick={() => openTunnelDialog(selectedInstance.instanceId)}
-	                              title={connectionDisabledTitle}
-	                              type="button"
-	                            >
-                              Start Tunnel
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </>
-	              </aside>
+                        <div className="action-stack connection-actions__buttons">
+                          <button
+                            className="button-primary"
+                            disabled={!canConnectToInstance}
+                            onClick={() => void startConsoleSession(instanceConnectionKind, selectedInstance.instanceId, getInstanceActionsLocalPort())}
+                            title={connectionDisabledTitle}
+                            type="button"
+                          >
+                            {consoleOpenLabel(instanceConnectionKind)}
+                          </button>
+                          <button disabled={!canConnectToInstance} onClick={() => openTunnelDialog(selectedInstance.instanceId)} title={connectionDisabledTitle} type="button">
+                            Start Tunnel
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <div className="inspector-empty">
+                  <h2>Select an instance</h2>
+                  <p>Choose a resource in the middle pane to view details, actions, and connection settings.</p>
+                </div>
               )}
-	            </div>
-	            {contextMenuInstance && instanceContextMenu && (
-	              <div
-	                aria-label={`Instance actions for ${contextMenuInstance.instanceId}`}
-	                className="instance-context-menu"
-	                role="menu"
-	                style={{ left: instanceContextMenu.x, top: instanceContextMenu.y }}
-	              >
-	                <div className="instance-context-menu__heading">
-	                  <strong>{contextMenuInstance.name || contextMenuInstance.instanceId}</strong>
-	                  {contextMenuInstance.name && <code>{contextMenuInstance.instanceId}</code>}
-	                </div>
-	                <button
-	                  disabled={!activeProfileReady || isPowerActionBusy || contextMenuInstance.state !== "stopped"}
-	                  onClick={() => void runInstancePowerActionForInstance("start", contextMenuInstance.instanceId)}
-	                  role="menuitem"
-	                  type="button"
-	                >
-	                  Start
-	                </button>
-	                <button
-	                  disabled={!activeProfileReady || isPowerActionBusy || contextMenuInstance.state !== "running"}
-	                  onClick={() => void runInstancePowerActionForInstance("stop", contextMenuInstance.instanceId)}
-	                  role="menuitem"
-	                  type="button"
-	                >
-	                  Stop
-	                </button>
-	              </div>
-	            )}
-		          </section>
-		        )}
+            </aside>
+
+            {contextMenuInstance && instanceContextMenu && (
+              <div
+                aria-label={`Instance actions for ${contextMenuInstance.instanceId}`}
+                className="instance-context-menu"
+                role="menu"
+                style={{ left: instanceContextMenu.x, top: instanceContextMenu.y }}
+              >
+                <div className="instance-context-menu__heading">
+                  <strong>{contextMenuInstance.name || contextMenuInstance.instanceId}</strong>
+                  {contextMenuInstance.name && <code>{contextMenuInstance.instanceId}</code>}
+                </div>
+                <button disabled={!activeProfileReady || isPowerActionBusy || contextMenuInstance.state !== "stopped"} onClick={() => void runInstancePowerActionForInstance("start", contextMenuInstance.instanceId)} role="menuitem" type="button">
+                  <PlusIcon />
+                  <span>Start</span>
+                </button>
+                <button disabled={!activeProfileReady || isPowerActionBusy || contextMenuInstance.state !== "running"} onClick={() => void runInstancePowerActionForInstance("stop", contextMenuInstance.instanceId)} role="menuitem" type="button">
+                  <CloseIcon />
+                  <span>Stop</span>
+                </button>
+              </div>
+            )}
+          </section>
+        )}
 
         {isTunnelDialogOpen && (
           <div className="console-dialog tunnel-dialog" role="dialog" aria-modal="true" aria-labelledby="tunnel-dialog-title">

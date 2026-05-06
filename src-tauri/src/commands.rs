@@ -3,7 +3,7 @@ use crate::models::{
     CredentialKind, CredentialRecord, CredentialStoreStatus, CredentialSummary, DiagnosticArea,
     DiagnosticEvent, EnvironmentState, InstancePowerActionResult, InstancePowerRequest,
     InstanceSummary, PortAllocationSource, PortForwardRequest, ProfileCapabilityReport,
-    RdpSessionRequest, RegionOption, SessionKind, SessionRecord, SshSessionRequest,
+    RdpSessionRequest, RegionOption, SessionKind, SessionRecord, SshAuthMode, SshSessionRequest,
     SsoLoginAttempt, SsoLoginAttemptStatus, TunnelListenerStatus, UpsertCredentialRequest,
     UserPreferences,
 };
@@ -474,11 +474,92 @@ pub fn start_ssh_session(
     Ok(record)
 }
 
+fn selected_credential_id(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn rdp_username_with_domain(username: Option<String>, domain: Option<String>) -> Option<String> {
+    let username = username?.trim().to_string();
+    if username.is_empty() {
+        return None;
+    }
+    let domain = domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if username.contains('\\') || username.contains('@') {
+        return Some(username);
+    }
+    domain.map_or(Some(username.clone()), |domain| {
+        Some(format!("{domain}\\{username}"))
+    })
+}
+
+fn hydrate_console_request_credentials(
+    request: &mut ConsoleSessionRequest,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    match request.kind {
+        crate::models::ConsoleSessionKind::Shell => Ok(()),
+        crate::models::ConsoleSessionKind::Ssh => {
+            let Some(credential_id) = selected_credential_id(&request.ssh_credential_id) else {
+                return Ok(());
+            };
+            let credential = state
+                .credentials
+                .lock()
+                .map_err(|_| "Credential store is unavailable".to_string())?
+                .get(&credential_id)?;
+            if credential.kind != CredentialKind::Ssh {
+                return Err("Selected credential is not an SSH credential.".to_string());
+            }
+
+            request.username = credential.username.or_else(|| Some("ec2-user".to_string()));
+            request.ssh_password = None;
+            request.ssh_key_path = None;
+            request.ssh_private_key_content = None;
+            match credential.ssh_auth_mode.unwrap_or(SshAuthMode::Password) {
+                SshAuthMode::Password => request.ssh_password = credential.password,
+                SshAuthMode::PrivateKeyPath => request.ssh_key_path = credential.ssh_key_path,
+                SshAuthMode::PrivateKeyContent => {
+                    request.ssh_private_key_content = credential.ssh_private_key_content
+                }
+            }
+            Ok(())
+        }
+        crate::models::ConsoleSessionKind::Rdp => {
+            let Some(credential_id) = selected_credential_id(&request.rdp_credential_id) else {
+                return Ok(());
+            };
+            let credential = state
+                .credentials
+                .lock()
+                .map_err(|_| "Credential store is unavailable".to_string())?
+                .get(&credential_id)?;
+            if credential.kind != CredentialKind::Rdp {
+                return Err("Selected credential is not an RDP credential.".to_string());
+            }
+
+            request.rdp_username = rdp_username_with_domain(credential.username, credential.domain)
+                .or_else(|| request.username.clone());
+            request.rdp_password = credential.password;
+            request.rdp_security_mode = credential
+                .rdp_security_mode
+                .or_else(|| Some("auto".to_string()));
+            Ok(())
+        }
+    }
+}
+
 #[tauri::command]
 pub fn start_console_session(
     app: AppHandle,
     state: State<'_, AppState>,
-    request: ConsoleSessionRequest,
+    mut request: ConsoleSessionRequest,
 ) -> Result<ConsoleSessionRecord, String> {
     if matches!(request.kind, crate::models::ConsoleSessionKind::Shell) {
         let managed_session = console::shell_console_session(app, &request)?;
@@ -508,6 +589,8 @@ pub fn start_console_session(
             .map_err(|_| "Console registry is unavailable".to_string())?;
         return Ok(registry.insert(managed_session));
     }
+
+    hydrate_console_request_credentials(&mut request, &state)?;
 
     let tunnel_request = match request.kind {
         crate::models::ConsoleSessionKind::Shell => {
