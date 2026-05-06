@@ -284,20 +284,6 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
           },
         ]
       : [],
-    get_credential: {
-      id: "preview-ssh",
-      label: "Demo SSH",
-      kind: "ssh",
-      username: "ec2-user",
-      password: null,
-      domain: null,
-      sshAuthMode: "privateKeyPath",
-      sshKeyPath: "/Users/demo/.ssh/id_rsa",
-      sshPrivateKeyContent: null,
-      rdpSecurityMode: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
     upsert_credential: {
       id: `preview-credential-${Date.now()}`,
       label: "Preview credential",
@@ -390,6 +376,39 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
       },
     ],
   };
+
+  if (command === "get_credential") {
+    const credentialId = typeof args?.credentialId === "string" ? args.credentialId : "preview-ssh";
+    return (credentialId === "preview-rdp"
+      ? {
+          id: "preview-rdp",
+          label: "Demo RDP",
+          kind: "rdp",
+          username: "Administrator",
+          password: null,
+          domain: "DEMO",
+          sshAuthMode: null,
+          sshKeyPath: null,
+          sshPrivateKeyContent: null,
+          rdpSecurityMode: "auto",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          id: "preview-ssh",
+          label: "Demo SSH",
+          kind: "ssh",
+          username: "ec2-user",
+          password: null,
+          domain: null,
+          sshAuthMode: "privateKeyPath",
+          sshKeyPath: "/Users/demo/.ssh/id_rsa",
+          sshPrivateKeyContent: null,
+          rdpSecurityMode: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }) as T;
+  }
 
   if (command === "get_ssm_readiness") {
     if (preview.instanceDelayMs > 0) {
