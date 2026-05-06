@@ -6,7 +6,7 @@ All notable changes to SSM Commander are tracked here.
 
 - Bundle platform-specific `guacd` sidecar binaries for packaged builds.
 
-## [0.0.0] - Unreleased
+## [1.0.0] - 2026-05-06
 
 ### 2026-05-06
 
@@ -18,6 +18,10 @@ All notable changes to SSM Commander are tracked here.
 - Improve embedded console session lifecycle handling and close behavior.
 - Add RDP domain handling and explicit RDP security mode support.
 - Keep embedded SSH and RDP credentials out of persisted preferences and logs.
+- Reduce credential secret exposure across the renderer boundary by resolving saved credentials in the Tauri backend for console launches.
+- Clear edited credential secrets from renderer state when locking the vault or leaving the Credentials view.
+- Harden credential vault and pasted SSH key temporary file permissions.
+- Enforce stronger master passphrases for newly created credential vaults.
 
 ### 2026-05-04
 

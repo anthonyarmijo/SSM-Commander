@@ -1,6 +1,6 @@
 # Dependency Setup
 
-SSM Commander depends on the existing AWS tooling rather than replacing it. That keeps profile, SSO, and credential behavior aligned with the AWS CLI you already use.
+SSM Commander depends on the existing AWS tooling rather than replacing it. That keeps profile, SSO, and AWS credential behavior aligned with the AWS CLI you already use.
 
 ## macOS
 
@@ -70,6 +70,8 @@ Development builds also require Rust:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+Frontend development also requires Node.js and npm.
+
 ## Windows
 
 Required:
@@ -97,3 +99,9 @@ aws sts get-caller-identity --profile your-profile
 ```
 
 The app can validate profiles and report clear errors, but it does not replace IAM, SSO, or Session Manager account configuration.
+
+## Local Credential Vault
+
+SSM Commander v1.0 can save optional SSH and RDP connection details in an encrypted local vault. The vault is separate from AWS credentials, requires a master passphrase to unlock, and is intended only for connection details used by embedded console sessions.
+
+Saved credential secrets are resolved by the Tauri backend when a console session starts. They are not written to preferences, diagnostics, or release fixtures. Manually entered SSH/RDP passwords and pasted private keys are treated as session-only values.

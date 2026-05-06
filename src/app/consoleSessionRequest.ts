@@ -10,9 +10,11 @@ export interface BuildConsoleSessionRequestInput {
   sshPassword: string;
   sshKeyPath: string;
   sshPrivateKeyContent: string;
+  sshCredentialId: string;
   rdpUsername: string;
   rdpDomain: string;
   rdpPassword: string;
+  rdpCredentialId: string;
   rdpSecurityMode: RdpSecurityMode;
   terminalCols: number;
   terminalRows: number;
@@ -39,8 +41,10 @@ export function buildConsoleSessionRequest(input: BuildConsoleSessionRequestInpu
     sshPassword: input.kind === "ssh" ? input.sshPassword || null : null,
     sshKeyPath: input.kind === "ssh" ? input.sshKeyPath || null : null,
     sshPrivateKeyContent: input.kind === "ssh" ? input.sshPrivateKeyContent || null : null,
+    sshCredentialId: input.kind === "ssh" ? input.sshCredentialId || null : null,
     rdpUsername: input.kind === "rdp" ? buildRdpCredentialUsername(input.rdpUsername, input.rdpDomain) || null : null,
     rdpPassword: input.kind === "rdp" ? input.rdpPassword || null : null,
+    rdpCredentialId: input.kind === "rdp" ? input.rdpCredentialId || null : null,
     rdpSecurityMode: input.kind === "rdp" ? input.rdpSecurityMode : null,
     terminalCols: input.terminalCols,
     terminalRows: input.terminalRows,

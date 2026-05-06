@@ -58,6 +58,7 @@ import {
 import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacement";
 import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
 import { buildConsoleSessionRequest } from "./consoleSessionRequest";
+import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormState } from "./credentialForm";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
 import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
@@ -108,35 +109,11 @@ const SAVED_PROFILE_WORKSPACE_HELP =
 type ResolvedTheme = "light" | "dark";
 type ProfileStateMap = Record<string, SavedProfileState>;
 type InstanceContextMenuState = { instanceId: string; x: number; y: number } | null;
-type CredentialFormState = {
-  id: string;
-  label: string;
-  kind: CredentialKind;
-  username: string;
-  password: string;
-  domain: string;
-  sshAuthMode: SshAuthMode;
-  sshKeyPath: string;
-  sshPrivateKeyContent: string;
-  rdpSecurityMode: RdpSecurityMode;
-};
 const technicalInputProps = {
   autoCapitalize: "none",
   autoCorrect: "off",
   spellCheck: false,
 } as const;
-const emptyCredentialForm: CredentialFormState = {
-  id: "",
-  label: "",
-  kind: "ssh",
-  username: "",
-  password: "",
-  domain: "",
-  sshAuthMode: "password",
-  sshKeyPath: "",
-  sshPrivateKeyContent: "",
-  rdpSecurityMode: "auto",
-};
 
 function buildAwsContextKey(profile: string, region: string): string {
   if (!profile || !region) return "";
@@ -841,6 +818,7 @@ export function App() {
     const status = await invokeCommand<CredentialStoreStatus>("lock_credentials");
     setCredentialStatus(status);
     setCredentials([]);
+    setCredentialForm(clearCredentialFormSecrets());
     setSelectedSshCredentialId("");
     setSelectedRdpCredentialId("");
     setSshPrivateKeyContent("");
@@ -954,27 +932,27 @@ export function App() {
   async function applyCredentialToConnection(kind: CredentialKind, credentialId: string) {
     if (kind === "ssh") {
       setSelectedSshCredentialId(credentialId);
+      setSshPassword("");
+      setSshPrivateKeyContent("");
+      setSshKeyPath("");
     } else {
       setSelectedRdpCredentialId(credentialId);
+      setRdpPassword("");
     }
-    setSshPrivateKeyContent("");
     if (!credentialId) return;
 
-    try {
-      const credential = await invokeCommand<CredentialRecord>("get_credential", { credentialId });
-      if (credential.kind === "ssh") {
-        setSshUser(credential.username || "ec2-user");
-        setSshPassword(credential.password || "");
-        setSshKeyPath(credential.sshKeyPath || "");
-        setSshPrivateKeyContent(credential.sshPrivateKeyContent || "");
-      } else {
-        setRdpUsername(credential.username || "");
-        setRdpDomain(credential.domain || "");
-        setRdpPassword(credential.password || "");
-        setRdpSecurityMode(credential.rdpSecurityMode || "auto");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+    const credential = credentials.find((candidate) => candidate.id === credentialId);
+    if (!credential || credential.kind !== kind) {
+      setNotice("Selected credential is unavailable. Unlock credentials and try again.");
+      return;
+    }
+
+    if (credential.kind === "ssh") {
+      setSshUser(credential.username || "ec2-user");
+    } else {
+      setRdpUsername(credential.username || "");
+      setRdpDomain(credential.domain || "");
+      setRdpSecurityMode((credential.rdpSecurityMode as RdpSecurityMode | null) || "auto");
     }
   }
 
@@ -1562,9 +1540,11 @@ export function App() {
         sshPassword,
         sshKeyPath,
         sshPrivateKeyContent,
+        sshCredentialId: selectedSshCredentialId,
         rdpUsername,
         rdpDomain,
         rdpPassword,
+        rdpCredentialId: selectedRdpCredentialId,
         rdpSecurityMode,
         terminalCols: 100,
         terminalRows: 30,
@@ -1948,6 +1928,12 @@ export function App() {
       setActiveView("initialize");
     }
   }, [activeProfileReady, activeView]);
+
+  useEffect(() => {
+    if (activeView !== "credentials") {
+      setCredentialForm(clearCredentialFormSecrets());
+    }
+  }, [activeView]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -2797,7 +2783,7 @@ export function App() {
                               <label>
                                 Saved credential
                                 <select onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)} value={selectedInstanceCredentialId}>
-                                  <option value="">None</option>
+                                  <option value="">Manual entry</option>
                                   {instanceCredentialOptions.map((credential) => (
                                     <option key={credential.id} value={credential.id}>
                                       {credential.isDefault ? `${credential.label} (default)` : credential.label}
@@ -2830,7 +2816,7 @@ export function App() {
                           )
                         )}
 
-                        {instanceConnectionKind === "ssh" && !selectedInstanceCredentialId && (
+                        {instanceConnectionKind === "ssh" && (
                           <>
                             <label>
                               SSH user
@@ -2853,7 +2839,7 @@ export function App() {
                           </>
                         )}
 
-                        {instanceConnectionKind === "rdp" && !selectedInstanceCredentialId && (
+                        {instanceConnectionKind === "rdp" && (
                           <>
                             <label>
                               RDP username

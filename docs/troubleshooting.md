@@ -26,7 +26,7 @@ Confirm the selected profile and region can list EC2 instances:
 aws ec2 describe-instances --profile your-profile --region us-west-2 --output json
 ```
 
-The MVP lists pending, running, stopping, and stopped instances.
+The Instances view lists pending, running, stopping, and stopped instances.
 
 ## SSM Is Not Ready
 
@@ -75,13 +75,19 @@ Native or bundled `guacd` uses `127.0.0.1` as the RDP target host by default.
 Override `SSM_COMMANDER_GUACD_RDP_HOST` only when `guacd` runs somewhere that
 cannot reach host services through loopback.
 
-Packaged builds can use a bundled guacd sidecar. RDP credentials entered in Console are kept in memory only.
+Packaged builds can use a bundled guacd sidecar when one is available. RDP credentials entered manually in Console are kept in memory only.
 
 For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
-for example `cyber\pkiadmin`. Embedded RDP splits that into Guacamole's separate
+for example `EXAMPLE\admin`. Embedded RDP splits that into Guacamole's separate
 `domain` and `username` parameters. The Instances page also includes an advanced
 RDP security selector with Auto, NLA, NLA-Ext, TLS, and RDP options; Auto leaves
 security negotiation to `guacd`.
+
+## Credential Vault Does Not Unlock
+
+The credential vault requires the same master passphrase used when it was created. New vaults require a stronger passphrase. SSM Commander cannot recover a lost vault passphrase; delete the local vault from your app data directory only if you are prepared to recreate saved SSH/RDP credentials.
+
+When the vault is locked, saved credential options are unavailable and console launches fall back to manual entry. Locking the vault or leaving the Credentials view clears edited credential secrets from renderer state.
 
 ## Raw Tauri Dev Mode
 

@@ -10,9 +10,11 @@ const base = {
   sshPassword: "ssh-secret",
   sshKeyPath: "",
   sshPrivateKeyContent: "",
+  sshCredentialId: "saved-ssh",
   rdpUsername: "Administrator",
   rdpDomain: "DEMO",
   rdpPassword: "rdp-secret",
+  rdpCredentialId: "saved-rdp",
   rdpSecurityMode: "auto" as const,
   terminalCols: 100,
   terminalRows: 30,
@@ -25,6 +27,13 @@ describe("console session requests", () => {
     expect(buildConsoleSessionRequest({ ...base, kind: "ssh" }).sshPassword).toBe("ssh-secret");
     expect(buildConsoleSessionRequest({ ...base, kind: "rdp" }).sshPassword).toBeNull();
     expect(buildConsoleSessionRequest({ ...base, kind: "shell" }).sshPassword).toBeNull();
+  });
+
+  it("sends saved credential ids only for matching console kinds", () => {
+    expect(buildConsoleSessionRequest({ ...base, kind: "ssh" }).sshCredentialId).toBe("saved-ssh");
+    expect(buildConsoleSessionRequest({ ...base, kind: "rdp" }).rdpCredentialId).toBe("saved-rdp");
+    expect(buildConsoleSessionRequest({ ...base, kind: "shell" }).sshCredentialId).toBeNull();
+    expect(buildConsoleSessionRequest({ ...base, kind: "shell" }).rdpCredentialId).toBeNull();
   });
 
   it("combines RDP domain and username", () => {

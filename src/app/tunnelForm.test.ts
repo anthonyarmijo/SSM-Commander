@@ -18,7 +18,7 @@ describe("tunnel form validation", () => {
   it("builds a start_port_forward request from valid input", () => {
     const validation = validateTunnelForm({
       remotePort: "3389",
-      remoteHost: " dc01.cyber.cosmos.navy.mil ",
+      remoteHost: " rdp-host.example.test ",
       localPort: " 53989 ",
     });
 
@@ -26,15 +26,15 @@ describe("tunnel form validation", () => {
     if (!validation.ok) return;
 
     expect(buildPortForwardInvokeArgs(
-      { profile: "cyber-admin", region: "us-gov-west-1", instanceId: "i-06fcede36546e9bba" },
+      { profile: "demo-admin", region: "us-west-2", instanceId: "i-example123" },
       validation.value,
     )).toEqual({
       request: {
-        profile: "cyber-admin",
-        region: "us-gov-west-1",
-        instanceId: "i-06fcede36546e9bba",
+        profile: "demo-admin",
+        region: "us-west-2",
+        instanceId: "i-example123",
         remotePort: 3389,
-        remoteHost: "dc01.cyber.cosmos.navy.mil",
+        remoteHost: "rdp-host.example.test",
         localPort: 53989,
       },
     });

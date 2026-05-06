@@ -1,10 +1,10 @@
 [package]
 name = "ssm-commander"
-version = "0.1.0"
+version = "1.0.0"
 description = "SSM Commander desktop app for AWS Systems Manager access to EC2 instances"
 authors = ["Anthony"]
 license = "MIT"
-repository = "https://github.com/anthonyarmijo/ssm-mgmt-gui"
+repository = "https://github.com/anthonyarmijo/SSM-Commander"
 edition = "2021"
 
 [lib]

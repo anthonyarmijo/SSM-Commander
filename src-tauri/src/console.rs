@@ -7,7 +7,7 @@ use crate::models::{
 use chrono::Utc;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -318,25 +318,98 @@ pub fn ssh_command_args(username: &str, port: u16, key_path: Option<&str>) -> Ve
     args
 }
 
-fn write_temp_ssh_key(private_key_content: &str) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("ssm-commander-{}.key", Uuid::new_v4()));
-    fs::write(&path, private_key_content)
-        .map_err(|error| format!("Could not write temporary SSH key: {error}"))?;
-    set_private_key_permissions(&path)?;
+fn temp_ssh_key_dir() -> Result<PathBuf, String> {
+    let base = dirs_next::cache_dir()
+        .or_else(dirs_next::config_dir)
+        .ok_or_else(|| "Could not locate user cache directory".to_string())?;
+    let path = base.join("ssm-commander").join("session-keys");
+    create_private_directory(&path)?;
     Ok(path)
 }
 
 #[cfg(unix)]
-fn set_private_key_permissions(path: &PathBuf) -> Result<(), String> {
+fn create_private_directory(path: &PathBuf) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("Could not secure temporary SSH key: {error}"))
+    fs::create_dir_all(path)
+        .map_err(|error| format!("Could not create temporary SSH key directory: {error}"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("Could not secure temporary SSH key directory: {error}"))
 }
 
-#[cfg(not(unix))]
-fn set_private_key_permissions(_path: &PathBuf) -> Result<(), String> {
-    Ok(())
+#[cfg(windows)]
+fn create_private_directory(path: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|error| format!("Could not create temporary SSH key directory: {error}"))?;
+    secure_windows_path(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn create_private_directory(path: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|error| format!("Could not create temporary SSH key directory: {error}"))
+}
+
+fn write_temp_ssh_key(private_key_content: &str) -> Result<PathBuf, String> {
+    let path = temp_ssh_key_dir()?.join(format!("ssm-commander-{}.key", Uuid::new_v4()));
+    write_private_ssh_key_file(&path, private_key_content)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn write_private_ssh_key_file(path: &PathBuf, private_key_content: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("Could not create temporary SSH key: {error}"))?;
+    file.write_all(private_key_content.as_bytes())
+        .map_err(|error| format!("Could not write temporary SSH key: {error}"))
+}
+
+#[cfg(windows)]
+fn write_private_ssh_key_file(path: &PathBuf, private_key_content: &str) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Could not create temporary SSH key: {error}"))?;
+    file.write_all(private_key_content.as_bytes())
+        .map_err(|error| format!("Could not write temporary SSH key: {error}"))?;
+    secure_windows_path(path)
+}
+
+#[cfg(windows)]
+fn secure_windows_path(path: &PathBuf) -> Result<(), String> {
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .map_err(|_| "Could not resolve Windows user for temporary SSH key ACLs.".to_string())?;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .status()
+        .map_err(|error| format!("Could not secure temporary SSH key ACLs: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Could not secure temporary SSH key ACLs.".to_string())
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn write_private_ssh_key_file(path: &PathBuf, private_key_content: &str) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Could not create temporary SSH key: {error}"))?;
+    file.write_all(private_key_content.as_bytes())
+        .map_err(|error| format!("Could not write temporary SSH key: {error}"))
 }
 
 fn contains_ssh_password_prompt(output_tail: &str) -> bool {
@@ -1213,6 +1286,15 @@ mod tests {
         assert!(!args
             .iter()
             .any(|arg| arg.contains("BEGIN OPENSSH PRIVATE KEY")));
+        assert!(path_text.contains("ssm-commander"));
+        assert!(path_text.contains("session-keys"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         let _ = std::fs::remove_file(path);
     }
@@ -1241,10 +1323,10 @@ mod tests {
     #[test]
     fn splits_windows_domain_qualified_rdp_username() {
         assert_eq!(
-            normalize_rdp_credentials(Some("cyber\\pkiadmin".to_string())),
+            normalize_rdp_credentials(Some("EXAMPLE\\admin".to_string())),
             RdpCredentials {
-                username: Some("pkiadmin".to_string()),
-                domain: Some("cyber".to_string()),
+                username: Some("admin".to_string()),
+                domain: Some("EXAMPLE".to_string()),
             }
         );
     }
@@ -1252,9 +1334,9 @@ mod tests {
     #[test]
     fn leaves_plain_rdp_username_without_domain() {
         assert_eq!(
-            normalize_rdp_credentials(Some("pkiadmin".to_string())),
+            normalize_rdp_credentials(Some("admin".to_string())),
             RdpCredentials {
-                username: Some("pkiadmin".to_string()),
+                username: Some("admin".to_string()),
                 domain: None,
             }
         );
@@ -1263,13 +1345,13 @@ mod tests {
     #[test]
     fn passes_guacd_any_security_for_auto_rdp_mode() {
         let config = rdp_config(
-            Some("pkiadmin"),
-            Some("cyber"),
+            Some("admin"),
+            Some("EXAMPLE"),
             Some("secret"),
             RdpSecurityMode::Auto,
         );
 
-        assert_eq!(guacd_rdp_parameter_value("domain", &config), "cyber");
+        assert_eq!(guacd_rdp_parameter_value("domain", &config), "EXAMPLE");
         assert_eq!(guacd_rdp_parameter_value("security", &config), "any");
     }
 
@@ -1281,7 +1363,7 @@ mod tests {
             (RdpSecurityMode::Tls, "tls"),
             (RdpSecurityMode::Rdp, "rdp"),
         ] {
-            let config = rdp_config(Some("pkiadmin"), Some("cyber"), Some("secret"), mode);
+            let config = rdp_config(Some("admin"), Some("EXAMPLE"), Some("secret"), mode);
 
             assert_eq!(rdp_security_value(mode), expected);
             assert_eq!(guacd_rdp_parameter_value("security", &config), expected);
@@ -1299,8 +1381,8 @@ mod tests {
     #[test]
     fn omits_password_from_rdp_diagnostics() {
         let config = rdp_config(
-            Some("pkiadmin"),
-            Some("cyber"),
+            Some("admin"),
+            Some("EXAMPLE"),
             Some("super-secret-password"),
             RdpSecurityMode::Tls,
         );
@@ -1327,8 +1409,8 @@ mod tests {
         );
         let config = rdp_config_with_host(
             "host.docker.internal",
-            Some("pkiadmin"),
-            Some("cyber"),
+            Some("admin"),
+            Some("EXAMPLE"),
             Some("secret"),
             RdpSecurityMode::Auto,
         );

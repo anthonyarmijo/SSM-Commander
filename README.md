@@ -1,6 +1,6 @@
 # SSM Commander
 
-SSM Commander is a small Tauri app for browsing EC2 instances and launching AWS Systems Manager workflows from a desktop UI. It is designed for people who already use the AWS CLI and AWS SSO, but want a faster way to validate profiles, inspect instance readiness, start or stop instances, and run embedded SSH, RDP, shell, or port-forward sessions.
+SSM Commander is a Tauri desktop app for browsing EC2 instances and launching AWS Systems Manager workflows from a fast local UI. It is designed for people who already use the AWS CLI and AWS SSO, but want a cleaner way to validate profiles, inspect instance readiness, start or stop instances, and run embedded SSH, RDP, shell, or port-forward sessions.
 
 ![SSM Commander home screen](docs/screenshots/app-home-dark.png)
 
@@ -10,9 +10,12 @@ SSM Commander is a small Tauri app for browsing EC2 instances and launching AWS 
 - Save the profiles you care about most and keep one active across the app.
 - Validate AWS identity and launch AWS SSO sign-in from the UI.
 - Show a lightweight capability checklist for each saved profile.
-- Browse EC2 instances and SSM readiness by region.
+- Browse EC2 instances and SSM readiness by region in a three-pane resource view.
 - Start and stop EC2 instances from the selected profile.
 - Launch SSM shell, embedded SSH/RDP console tabs, and generic port-forward sessions.
+- Save optional SSH and RDP connection details in an encrypted local credential vault.
+- Set default SSH/RDP credentials and apply them from the Instances inspector without exposing saved secrets to persisted preferences.
+- Configure RDP domain and security mode details for embedded console launches.
 - Surface environment checks and local diagnostics in-app.
 
 ## Prerequisites
@@ -30,7 +33,7 @@ Recommended, depending on your workflow:
 - Docker for the one-command local dev workflow, or a native `guacd` binary for manual embedded RDP development
 - FreeRDP on macOS or the native Remote Desktop client on Windows for external RDP fallback
 
-Development builds also require Rust.
+Development builds also require Node.js, npm, and Rust.
 
 ## AWS Setup
 
@@ -43,6 +46,10 @@ aws sts get-caller-identity --profile your-profile
 ```
 
 The app does not replace IAM, AWS SSO, or Session Manager setup. It expects profiles and permissions to already exist.
+
+## v1.0 Release
+
+Version 1.0.0 launches the refreshed resource browser, embedded console tabs, encrypted local SSH/RDP credential vault, stronger credential handling, Docker-backed local `guacd` workflow, and public-release security checks.
 
 ## Development
 
@@ -82,10 +89,12 @@ cargo check
 
 ## Security Notes
 
-- The app does not store AWS credentials, passwords, or RDP passwords.
+- The app does not store AWS access keys or AWS session tokens.
 - Authentication and authorization continue to come from the AWS CLI profile you select.
-- Embedded SSH and RDP session credentials are kept in memory and are not persisted to preferences.
-- Public releases should be created from a fresh `git archive` export, scanned with Gitleaks, and pushed to a new repository.
+- Saved SSH and RDP credentials live only in the encrypted local credential vault after you unlock it with a master passphrase.
+- Saved credential secrets are resolved in the Tauri backend for console launches instead of being copied into persisted preferences.
+- Manually entered embedded SSH and RDP session credentials are kept in memory and are not persisted to preferences.
+- Public releases should be scanned with Gitleaks before publishing.
 
 ## Troubleshooting
 
