@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 type PreviewDesignVariant = "default" | "cool-ops" | "warm-ops";
-type PreviewView = "home" | "initialize" | "instances" | "console" | "activity";
+type PreviewView = "home" | "initialize" | "credentials" | "instances" | "console" | "activity";
 
 interface BrowserPreviewConfig {
   demoMode: boolean;
@@ -168,7 +168,7 @@ export function getBrowserPreviewConfig(): BrowserPreviewConfig {
     designVariant:
       variantParam === "cool-ops" || variantParam === "warm-ops" ? variantParam : "default",
     initialView:
-      viewParam === "initialize" || viewParam === "instances" || viewParam === "console" || viewParam === "activity"
+      viewParam === "initialize" || viewParam === "credentials" || viewParam === "instances" || viewParam === "console" || viewParam === "activity"
         ? viewParam
         : "home",
     instanceDelayMs: Number.isFinite(delayParam) ? Math.max(0, delayParam) : 0,
@@ -237,6 +237,86 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
           sidebarWidth: 286,
         }
       : {},
+    credential_store_status: {
+      exists: preview.demoMode,
+      unlocked: preview.demoMode,
+      credentialCount: preview.demoMode ? 2 : 0,
+      defaultSshCredentialId: preview.demoMode ? "preview-ssh" : null,
+      defaultRdpCredentialId: preview.demoMode ? "preview-rdp" : null,
+    },
+    unlock_credentials: {
+      exists: true,
+      unlocked: true,
+      credentialCount: preview.demoMode ? 2 : 0,
+      defaultSshCredentialId: preview.demoMode ? "preview-ssh" : null,
+      defaultRdpCredentialId: preview.demoMode ? "preview-rdp" : null,
+    },
+    lock_credentials: {
+      exists: preview.demoMode,
+      unlocked: false,
+      credentialCount: 0,
+      defaultSshCredentialId: null,
+      defaultRdpCredentialId: null,
+    },
+    list_credentials: preview.demoMode
+      ? [
+          {
+            id: "preview-ssh",
+            label: "Demo SSH",
+            kind: "ssh",
+            username: "ec2-user",
+            domain: null,
+            sshAuthMode: "privateKeyPath",
+            rdpSecurityMode: null,
+            isDefault: true,
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            id: "preview-rdp",
+            label: "Demo RDP",
+            kind: "rdp",
+            username: "Administrator",
+            domain: "DEMO",
+            sshAuthMode: null,
+            rdpSecurityMode: "auto",
+            isDefault: true,
+            updatedAt: new Date().toISOString(),
+          },
+        ]
+      : [],
+    get_credential: {
+      id: "preview-ssh",
+      label: "Demo SSH",
+      kind: "ssh",
+      username: "ec2-user",
+      password: null,
+      domain: null,
+      sshAuthMode: "privateKeyPath",
+      sshKeyPath: "/Users/demo/.ssh/id_rsa",
+      sshPrivateKeyContent: null,
+      rdpSecurityMode: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    upsert_credential: {
+      id: `preview-credential-${Date.now()}`,
+      label: "Preview credential",
+      kind: "ssh",
+      username: null,
+      domain: null,
+      sshAuthMode: "password",
+      rdpSecurityMode: null,
+      isDefault: false,
+      updatedAt: new Date().toISOString(),
+    },
+    delete_credential: null,
+    set_default_credential: {
+      exists: true,
+      unlocked: true,
+      credentialCount: preview.demoMode ? 2 : 0,
+      defaultSshCredentialId: preview.demoMode ? "preview-ssh" : null,
+      defaultRdpCredentialId: preview.demoMode ? "preview-rdp" : null,
+    },
     list_profiles: [
       { name: "demo-profile", source: "unknown", defaultRegion: "us-west-2" },
       { name: "sample-lab", source: "unknown", defaultRegion: "us-east-1" },

@@ -301,7 +301,9 @@ pub struct ConsoleSessionRequest {
     pub instance_id: String,
     pub local_port: Option<u16>,
     pub username: Option<String>,
+    pub ssh_password: Option<String>,
     pub ssh_key_path: Option<String>,
+    pub ssh_private_key_content: Option<String>,
     pub rdp_username: Option<String>,
     pub rdp_password: Option<String>,
     pub rdp_security_mode: Option<String>,
@@ -316,6 +318,15 @@ pub struct ConsoleSessionRequest {
 pub struct ConsoleOutputEvent {
     pub session_id: String,
     pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleSessionEndedEvent {
+    pub session_id: String,
+    pub kind: ConsoleSessionKind,
+    pub instance_id: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +374,77 @@ pub struct UserPreferences {
     pub sidebar_width: Option<u16>,
     pub instance_table_visible_columns: Option<Vec<String>>,
     pub instance_table_column_widths: Option<std::collections::HashMap<String, u16>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialKind {
+    Ssh,
+    Rdp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SshAuthMode {
+    Password,
+    PrivateKeyPath,
+    PrivateKeyContent,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialStoreStatus {
+    pub exists: bool,
+    pub unlocked: bool,
+    pub credential_count: usize,
+    pub default_ssh_credential_id: Option<String>,
+    pub default_rdp_credential_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSummary {
+    pub id: String,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub username: Option<String>,
+    pub domain: Option<String>,
+    pub ssh_auth_mode: Option<SshAuthMode>,
+    pub rdp_security_mode: Option<String>,
+    pub is_default: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialRecord {
+    pub id: String,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub domain: Option<String>,
+    pub ssh_auth_mode: Option<SshAuthMode>,
+    pub ssh_key_path: Option<String>,
+    pub ssh_private_key_content: Option<String>,
+    pub rdp_security_mode: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertCredentialRequest {
+    pub id: Option<String>,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub domain: Option<String>,
+    pub ssh_auth_mode: Option<SshAuthMode>,
+    pub ssh_key_path: Option<String>,
+    pub ssh_private_key_content: Option<String>,
+    pub rdp_security_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

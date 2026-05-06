@@ -11,11 +11,16 @@ import {
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen } from "@tauri-apps/api/event";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { message as dialogMessage, open as openDialog } from "@tauri-apps/plugin-dialog";
 import Guacamole from "guacamole-common-js";
 import "@xterm/xterm/css/xterm.css";
 import { StatusPill } from "../components/StatusPill";
 import { filterInstances } from "../features/instances/filters";
+import { defaultConnectionKindForInstance } from "../features/instances/connectionDefaults";
+import {
+  matchingCredentials,
+  selectDefaultCredentialId,
+} from "../features/instances/credentialDefaults";
 import {
   getInstancePowerSelection,
   normalizeInstanceSelection,
@@ -51,16 +56,23 @@ import {
   type SavedProfileState,
 } from "../features/profiles/profileHelpers";
 import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacement";
+import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
+import { buildConsoleSessionRequest } from "./consoleSessionRequest";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
-import { navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
+import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
 import type {
   AwsProfile,
   CapabilityStatus,
   CallerIdentity,
   ConsoleOutputEvent,
+  ConsoleSessionEndedEvent,
   ConsoleSessionKind,
   ConsoleSessionRecord,
+  CredentialKind,
+  CredentialRecord,
+  CredentialStoreStatus,
+  CredentialSummary,
   DependencyCheck,
   DiagnosticEvent,
   EnvironmentState,
@@ -70,8 +82,10 @@ import type {
   ProfileCapabilityReport,
   RdpSecurityMode,
   SessionRecord,
+  SshAuthMode,
   SsoLoginAttempt,
   ThemeMode,
+  UpsertCredentialRequest,
   UserPreferences,
 } from "../types/models";
 
@@ -94,11 +108,35 @@ const SAVED_PROFILE_WORKSPACE_HELP =
 type ResolvedTheme = "light" | "dark";
 type ProfileStateMap = Record<string, SavedProfileState>;
 type InstanceContextMenuState = { instanceId: string; x: number; y: number } | null;
+type CredentialFormState = {
+  id: string;
+  label: string;
+  kind: CredentialKind;
+  username: string;
+  password: string;
+  domain: string;
+  sshAuthMode: SshAuthMode;
+  sshKeyPath: string;
+  sshPrivateKeyContent: string;
+  rdpSecurityMode: RdpSecurityMode;
+};
 const technicalInputProps = {
   autoCapitalize: "none",
   autoCorrect: "off",
   spellCheck: false,
 } as const;
+const emptyCredentialForm: CredentialFormState = {
+  id: "",
+  label: "",
+  kind: "ssh",
+  username: "",
+  password: "",
+  domain: "",
+  sshAuthMode: "password",
+  sshKeyPath: "",
+  sshPrivateKeyContent: "",
+  rdpSecurityMode: "auto",
+};
 
 function buildAwsContextKey(profile: string, region: string): string {
   if (!profile || !region) return "";
@@ -344,6 +382,10 @@ function consoleOpenLabel(kind: ConsoleSessionKind): string {
   return `Open ${kind.toUpperCase()}`;
 }
 
+function credentialKindLabel(kind: CredentialKind): string {
+  return kind === "ssh" ? "SSH" : "RDP";
+}
+
 function isLoadedInstancesNotice(message: string): boolean {
   return /^Loaded \d+ instances\.$/.test(message.trim());
 }
@@ -381,12 +423,22 @@ export function App() {
   const [instanceConnectionKind, setInstanceConnectionKind] = useState<ConsoleSessionKind>("rdp");
   const [consoleInstanceId, setConsoleInstanceId] = useState("");
   const [rdpUsername, setRdpUsername] = useState("");
+  const [rdpDomain, setRdpDomain] = useState("");
   const [rdpPassword, setRdpPassword] = useState("");
   const [rdpSecurityMode, setRdpSecurityMode] = useState<RdpSecurityMode>("auto");
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [query, setQuery] = useState("");
   const [sshUser, setSshUser] = useState("ec2-user");
+  const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState("");
+  const [sshPrivateKeyContent, setSshPrivateKeyContent] = useState("");
+  const [credentialStatus, setCredentialStatus] = useState<CredentialStoreStatus | null>(null);
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
+  const [credentialPassphrase, setCredentialPassphrase] = useState("");
+  const [credentialNotice, setCredentialNotice] = useState("");
+  const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
+  const [selectedSshCredentialId, setSelectedSshCredentialId] = useState("");
+  const [selectedRdpCredentialId, setSelectedRdpCredentialId] = useState("");
   const [customLocalPort, setCustomLocalPort] = useState("");
   const [isInstancePortMappingEnabled, setIsInstancePortMappingEnabled] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
@@ -403,7 +455,7 @@ export function App() {
   const [instanceSort, setInstanceSort] = useState<InstanceTableSort | null>(null);
   const [expandedInstanceDetailId, setExpandedInstanceDetailId] = useState("");
   const [instanceContextMenu, setInstanceContextMenu] = useState<InstanceContextMenuState>(null);
-  const [dismissedInstanceActionsSelectionKey, setDismissedInstanceActionsSelectionKey] = useState("");
+  const [activeInstanceActionsSelectionKey, setActiveInstanceActionsSelectionKey] = useState("");
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false);
   const [isResizingTableColumn, setIsResizingTableColumn] = useState(false);
   const [isAddProfileOpen, setIsAddProfileOpen] = useState(false);
@@ -412,6 +464,8 @@ export function App() {
   const preferencesRef = useRef<UserPreferences>({});
   const instancesRequestIdRef = useRef(0);
   const columnMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeConsoleSessionIdRef = useRef("");
+  const manuallyClosingConsoleSessionIdsRef = useRef<Set<string>>(new Set());
   const ssoPollTimeoutsRef = useRef<Record<string, number>>({});
   const savedProfilesRef = useRef<string[]>([]);
 
@@ -422,7 +476,7 @@ export function App() {
   const selectedInstance = instances.find((instance) => instance.instanceId === selectedInstanceId) ?? null;
   const selectedInstanceActionsKey = buildInstanceActionsSelectionKey(selectedInstanceId, selectedInstanceIds);
   const shouldShowInstanceActionsOverlay = Boolean(
-    selectedInstance && selectedInstanceActionsKey !== dismissedInstanceActionsSelectionKey,
+    selectedInstance && selectedInstanceActionsKey && selectedInstanceActionsKey === activeInstanceActionsSelectionKey,
   );
   const selectedInstanceDetailsExpanded = Boolean(selectedInstance && expandedInstanceDetailId === selectedInstance.instanceId);
   const selectedInstanceDetailPanelId = selectedInstance ? `instance-details-${selectedInstance.instanceId}` : undefined;
@@ -431,6 +485,17 @@ export function App() {
   const selectedInstanceIdSet = useMemo(() => new Set(selectedInstanceIds), [selectedInstanceIds]);
   const filteredInstances = useMemo(() => filterInstances(instances, query), [instances, query]);
   const visibleInstances = useMemo(() => sortInstances(filteredInstances, instanceSort), [filteredInstances, instanceSort]);
+  const sshCredentials = useMemo(() => matchingCredentials(credentials, "ssh"), [credentials]);
+  const rdpCredentials = useMemo(() => matchingCredentials(credentials, "rdp"), [credentials]);
+  const instanceCredentialKind: CredentialKind | null = instanceConnectionKind === "ssh" || instanceConnectionKind === "rdp"
+    ? instanceConnectionKind
+    : null;
+  const instanceCredentialOptions = instanceCredentialKind === "ssh" ? sshCredentials : instanceCredentialKind === "rdp" ? rdpCredentials : [];
+  const selectedInstanceCredentialId = instanceCredentialKind === "ssh"
+    ? selectedSshCredentialId
+    : instanceCredentialKind === "rdp"
+      ? selectedRdpCredentialId
+      : "";
   const runningInstances = useMemo(
     () => instances.filter((instance) => instance.state === "running"),
     [instances],
@@ -690,6 +755,163 @@ export function App() {
     });
   }
 
+  async function loadCredentialStatus() {
+    const status = await invokeCommand<CredentialStoreStatus>("credential_store_status");
+    setCredentialStatus(status);
+    if (status.unlocked) {
+      const summaries = await invokeCommand<CredentialSummary[]>("list_credentials");
+      setCredentials(summaries);
+      setSelectedSshCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "ssh"));
+      setSelectedRdpCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "rdp"));
+    } else {
+      setCredentials([]);
+      setSelectedSshCredentialId("");
+      setSelectedRdpCredentialId("");
+    }
+  }
+
+  async function unlockCredentialStore() {
+    try {
+      const hadCredentialStore = Boolean(credentialStatus?.exists);
+      const status = await invokeCommand<CredentialStoreStatus>("unlock_credentials", { passphrase: credentialPassphrase });
+      const summaries = await invokeCommand<CredentialSummary[]>("list_credentials");
+      setCredentialStatus(status);
+      setCredentials(summaries);
+      setSelectedSshCredentialId(selectDefaultCredentialId(summaries, status, "ssh"));
+      setSelectedRdpCredentialId(selectDefaultCredentialId(summaries, status, "rdp"));
+      setCredentialPassphrase("");
+      setCredentialNotice(hadCredentialStore ? "Credentials unlocked." : "Credentials vault created.");
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function lockCredentialStore() {
+    const status = await invokeCommand<CredentialStoreStatus>("lock_credentials");
+    setCredentialStatus(status);
+    setCredentials([]);
+    setSelectedSshCredentialId("");
+    setSelectedRdpCredentialId("");
+    setSshPrivateKeyContent("");
+    setSshPassword("");
+    setRdpPassword("");
+    setCredentialNotice("Credentials locked.");
+  }
+
+  async function refreshCredentialSummaries() {
+    const [status, summaries] = await Promise.all([
+      invokeCommand<CredentialStoreStatus>("credential_store_status"),
+      invokeCommand<CredentialSummary[]>("list_credentials"),
+    ]);
+    setCredentialStatus(status);
+    setCredentials(summaries);
+    setSelectedSshCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "ssh"));
+    setSelectedRdpCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "rdp"));
+  }
+
+  function buildCredentialRequest(): UpsertCredentialRequest {
+    return {
+      id: credentialForm.id || null,
+      label: credentialForm.label,
+      kind: credentialForm.kind,
+      username: credentialForm.username || null,
+      password: credentialForm.password || null,
+      domain: credentialForm.kind === "rdp" ? credentialForm.domain || null : null,
+      sshAuthMode: credentialForm.kind === "ssh" ? credentialForm.sshAuthMode : null,
+      sshKeyPath: credentialForm.kind === "ssh" && credentialForm.sshAuthMode === "privateKeyPath" ? credentialForm.sshKeyPath || null : null,
+      sshPrivateKeyContent: credentialForm.kind === "ssh" && credentialForm.sshAuthMode === "privateKeyContent" ? credentialForm.sshPrivateKeyContent || null : null,
+      rdpSecurityMode: credentialForm.kind === "rdp" ? credentialForm.rdpSecurityMode : null,
+    };
+  }
+
+  async function saveCredential() {
+    try {
+      const summary = await invokeCommand<CredentialSummary>("upsert_credential", { request: buildCredentialRequest() });
+      await refreshCredentialSummaries();
+      setCredentialForm(emptyCredentialForm);
+      setCredentialNotice(`Saved ${summary.label}.`);
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function editCredential(credentialId: string) {
+    try {
+      const credential = await invokeCommand<CredentialRecord>("get_credential", { credentialId });
+      setCredentialForm({
+        id: credential.id,
+        label: credential.label,
+        kind: credential.kind,
+        username: credential.username || "",
+        password: credential.password || "",
+        domain: credential.domain || "",
+        sshAuthMode: credential.sshAuthMode || "password",
+        sshKeyPath: credential.sshKeyPath || "",
+        sshPrivateKeyContent: credential.sshPrivateKeyContent || "",
+        rdpSecurityMode: credential.rdpSecurityMode || "auto",
+      });
+      setCredentialNotice(`Editing ${credential.label}.`);
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function deleteCredential(credentialId: string) {
+    try {
+      await invokeCommand("delete_credential", { credentialId });
+      await refreshCredentialSummaries();
+      setCredentialNotice("Credential deleted.");
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function setDefaultCredential(kind: CredentialKind, credentialId: string) {
+    try {
+      const status = await invokeCommand<CredentialStoreStatus>("set_default_credential", {
+        kind,
+        credentialId: credentialId || null,
+      });
+      setCredentialStatus(status);
+      if (kind === "ssh") {
+        setSelectedSshCredentialId(credentialId);
+      } else {
+        setSelectedRdpCredentialId(credentialId);
+      }
+      await refreshCredentialSummaries();
+      setCredentialNotice(credentialId ? `Default ${credentialKindLabel(kind)} credential updated.` : `Default ${credentialKindLabel(kind)} credential cleared.`);
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function applyCredentialToConnection(kind: CredentialKind, credentialId: string) {
+    if (kind === "ssh") {
+      setSelectedSshCredentialId(credentialId);
+    } else {
+      setSelectedRdpCredentialId(credentialId);
+    }
+    setSshPrivateKeyContent("");
+    if (!credentialId) return;
+
+    try {
+      const credential = await invokeCommand<CredentialRecord>("get_credential", { credentialId });
+      if (credential.kind === "ssh") {
+        setSshUser(credential.username || "ec2-user");
+        setSshPassword(credential.password || "");
+        setSshKeyPath(credential.sshKeyPath || "");
+        setSshPrivateKeyContent(credential.sshPrivateKeyContent || "");
+      } else {
+        setRdpUsername(credential.username || "");
+        setRdpDomain(credential.domain || "");
+        setRdpPassword(credential.password || "");
+        setRdpSecurityMode(credential.rdpSecurityMode || "auto");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function checkEnvironment() {
     setNotice("Checking local tools...");
     const state = await invokeCommand<EnvironmentState>("check_environment");
@@ -759,9 +981,36 @@ export function App() {
       }
 
       setSshKeyPath(selectedPath);
+      setSshPrivateKeyContent("");
       await savePreferencesPatch(buildConnectionPreferences({ sshKeyPath: selectedPath }));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not open the SSH key picker.");
+    }
+  }
+
+  async function browseForCredentialSshKeyPath() {
+    if (!isTauriRuntime()) {
+      setCredentialNotice("SSH key browsing is available in the desktop app.");
+      return;
+    }
+
+    try {
+      const selectedPath = await openDialog({
+        directory: false,
+        multiple: false,
+        title: "Choose an SSH key",
+      });
+
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+
+      setCredentialForm((current) => ({
+        ...current,
+        sshKeyPath: selectedPath,
+      }));
+    } catch (error) {
+      setCredentialNotice(error instanceof Error ? error.message : "Could not open the SSH key picker.");
     }
   }
 
@@ -1233,7 +1482,7 @@ export function App() {
     const trimmedInstanceId = instanceId.trim();
     if (!activeProfile || !activeProfileRegion || !trimmedInstanceId) return;
     const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
-      request: {
+      request: buildConsoleSessionRequest({
         kind,
         profile: activeProfile,
         region: activeProfileRegion,
@@ -1243,16 +1492,19 @@ export function App() {
           : localPortOverride === undefined
             ? (customLocalPort ? Number(customLocalPort) : null)
             : localPortOverride,
-        username: kind === "ssh" ? sshUser || null : null,
-        sshKeyPath: kind === "ssh" ? sshKeyPath || null : null,
-        rdpUsername: kind === "rdp" ? rdpUsername || null : null,
-        rdpPassword: kind === "rdp" ? rdpPassword || null : null,
-        rdpSecurityMode: kind === "rdp" ? rdpSecurityMode : null,
+        sshUser,
+        sshPassword,
+        sshKeyPath,
+        sshPrivateKeyContent,
+        rdpUsername,
+        rdpDomain,
+        rdpPassword,
+        rdpSecurityMode,
         terminalCols: 100,
         terminalRows: 30,
         width: 1280,
         height: 720,
-      },
+      }),
     });
     setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
     setActiveConsoleSessionId(session.id);
@@ -1268,7 +1520,10 @@ export function App() {
     await loadDiagnostics();
   }
 
-  async function stopConsoleSession(sessionId: string) {
+  async function stopConsoleSession(sessionId: string, options: { manual?: boolean } = {}) {
+    if (options.manual) {
+      manuallyClosingConsoleSessionIdsRef.current.add(sessionId);
+    }
     await invokeCommand<ConsoleSessionRecord>("stop_console_session", { sessionId });
     setConsoleSessions((current) => {
       const next = current.filter((session) => session.id !== sessionId);
@@ -1363,11 +1618,9 @@ export function App() {
     setSelectedInstanceIds(nextSelection.selectedInstanceIds);
     setSelectedInstanceId(nextSelection.primarySelectedInstanceId);
     setSelectionAnchorId(nextSelection.anchorInstanceId);
-    if (
-      buildInstanceActionsSelectionKey(nextSelection.primarySelectedInstanceId, nextSelection.selectedInstanceIds)
-      !== selectedInstanceActionsKey
-    ) {
-      setDismissedInstanceActionsSelectionKey("");
+    const nextSelectionKey = buildInstanceActionsSelectionKey(nextSelection.primarySelectedInstanceId, nextSelection.selectedInstanceIds);
+    if (nextSelectionKey !== selectedInstanceActionsKey) {
+      setActiveInstanceActionsSelectionKey("");
     }
   }
 
@@ -1387,18 +1640,33 @@ export function App() {
     setSelectionAnchorId(instanceId);
     setExpandedInstanceDetailId((current) => current === instanceId ? current : "");
     if (buildInstanceActionsSelectionKey(instanceId, [instanceId]) !== selectedInstanceActionsKey) {
-      setDismissedInstanceActionsSelectionKey("");
+      setActiveInstanceActionsSelectionKey("");
     }
     setInstanceContextMenu({ instanceId, x, y });
   }
 
+  function showInstanceActionsOverlay() {
+    if (!selectedInstance || !selectedInstanceActionsKey) return;
+    const defaultKind = defaultConnectionKindForInstance(selectedInstance);
+    const defaultCredentialId = selectDefaultCredentialId(credentials, credentialStatus, defaultKind === "ssh" ? "ssh" : "rdp");
+    setInstanceConnectionKind(defaultKind);
+    setActiveInstanceActionsSelectionKey(selectedInstanceActionsKey);
+    if (defaultCredentialId) {
+      void applyCredentialToConnection(defaultKind === "ssh" ? "ssh" : "rdp", defaultCredentialId);
+    }
+  }
+
   function dismissInstanceActionsOverlay() {
-    setDismissedInstanceActionsSelectionKey(selectedInstanceActionsKey);
+    setActiveInstanceActionsSelectionKey("");
   }
 
   useEffect(() => {
     savedProfilesRef.current = savedProfiles;
   }, [savedProfiles]);
+
+  useEffect(() => {
+    activeConsoleSessionIdRef.current = activeConsoleSessionId;
+  }, [activeConsoleSessionId]);
 
   useEffect(() => {
     if (instanceSort && !instanceTableVisibleColumns.includes(instanceSort.columnId)) {
@@ -1534,6 +1802,7 @@ export function App() {
       try {
         await checkEnvironment();
         await loadProfilesAndPreferences();
+        await loadCredentialStatus();
         await loadSessions();
         await loadConsoleSessions();
         await loadDiagnostics();
@@ -1609,10 +1878,56 @@ export function App() {
   }, [activeProfile, activeProfileRegion]);
 
   useEffect(() => {
-    if (activeView === "instances" && !activeProfileReady) {
+    if (isInitializationGatedView(activeView) && !activeProfileReady) {
       setActiveView("initialize");
     }
   }, [activeProfileReady, activeView]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let unlisten: (() => void) | null = null;
+    void listen<ConsoleSessionEndedEvent>("console-session-ended", (event) => {
+      const endedSession = event.payload;
+      if (!shouldAutoCloseEndedConsoleSession(endedSession, manuallyClosingConsoleSessionIdsRef.current)) {
+        return;
+      }
+
+      void (async () => {
+        try {
+          await dialogMessage(endedSession.message, {
+            kind: "info",
+            title: "SSH disconnected",
+          });
+        } catch {
+          window.alert(endedSession.message);
+        }
+
+        try {
+          await invokeCommand<ConsoleSessionRecord>("stop_console_session", { sessionId: endedSession.sessionId });
+        } catch {
+          // The session may already be gone if the user closed it while the dialog was open.
+        }
+
+        setConsoleSessions((current) => {
+          const next = current.filter((session) => session.id !== endedSession.sessionId);
+          if (activeConsoleSessionIdRef.current === endedSession.sessionId) {
+            const nextActiveSessionId = next[0]?.id ?? "";
+            activeConsoleSessionIdRef.current = nextActiveSessionId;
+            setActiveConsoleSessionId(nextActiveSessionId);
+          }
+          return next;
+        });
+        await loadSessions();
+        await loadDiagnostics();
+      })();
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (activeView !== "instances" || !activeProfileReady || isInstancesLoading || !currentAwsContextKey) return;
@@ -1650,7 +1965,7 @@ export function App() {
       <aside className="sidebar" aria-label="Primary navigation">
         <nav className="side-nav" aria-label="Workspace sections">
           {navItems.map((item) => {
-            const isDisabled = item.view === "instances" && !activeProfileReady;
+            const isDisabled = isInitializationGatedView(item.view) && !activeProfileReady;
             return (
               <button
                 aria-current={activeView === item.view ? "page" : undefined}
@@ -2044,6 +2359,199 @@ export function App() {
           </section>
         )}
 
+        {activeView === "credentials" && (
+          <section className="view view--credentials" aria-labelledby="credentials-title">
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Credentials</p>
+                <h2 id="credentials-title">Connection credentials</h2>
+              </div>
+              {credentialStatus?.unlocked && (
+                <button className="button-ghost" onClick={() => void lockCredentialStore()} type="button">
+                  Lock
+                </button>
+              )}
+            </header>
+
+            {credentialNotice && (
+              <div className={`notice notice--compact ${credentialNotice.toLowerCase().includes("could not") || credentialNotice.toLowerCase().includes("required") ? "notice--error" : ""}`}>
+                {credentialNotice}
+              </div>
+            )}
+
+            {!credentialStatus?.unlocked ? (
+              <section className="panel credential-unlock-panel" aria-label="Unlock credentials">
+                <div className="section-heading">
+                  <h2>{credentialStatus?.exists ? "Unlock credentials" : "Create credentials vault"}</h2>
+                  <StatusPill label={credentialStatus?.exists ? "locked" : "new"} tone="warn" />
+                </div>
+                <label>
+                  Master passphrase
+                  <input
+                    {...technicalInputProps}
+                    onChange={(event) => setCredentialPassphrase(event.target.value)}
+                    type="password"
+                    value={credentialPassphrase}
+                  />
+                </label>
+                <div className="button-row">
+                  <button className="button-primary" onClick={() => void unlockCredentialStore()} type="button">
+                    {credentialStatus?.exists ? "Unlock" : "Create vault"}
+                  </button>
+                </div>
+              </section>
+            ) : (
+              <div className="credentials-layout">
+                <section className="panel credential-editor" aria-label="Credential editor">
+                  <div className="section-heading">
+                    <h2>{credentialForm.id ? "Edit credential" : "New credential"}</h2>
+                    {credentialForm.id && (
+                      <button className="button-ghost" onClick={() => setCredentialForm(emptyCredentialForm)} type="button">
+                        New
+                      </button>
+                    )}
+                  </div>
+                  <label>
+                    Label
+                    <input
+                      onChange={(event) => setCredentialForm((current) => ({ ...current, label: event.target.value }))}
+                      value={credentialForm.label}
+                    />
+                  </label>
+                  <label>
+                    Type
+                    <select
+                      onChange={(event) => setCredentialForm((current) => ({ ...current, kind: event.target.value as CredentialKind }))}
+                      value={credentialForm.kind}
+                    >
+                      <option value="ssh">SSH</option>
+                      <option value="rdp">RDP</option>
+                    </select>
+                  </label>
+                  <label>
+                    Username
+                    <input
+                      {...technicalInputProps}
+                      onChange={(event) => setCredentialForm((current) => ({ ...current, username: event.target.value }))}
+                      value={credentialForm.username}
+                    />
+                  </label>
+
+                  {credentialForm.kind === "ssh" ? (
+                    <>
+                      <label>
+                        SSH auth
+                        <select
+                          onChange={(event) => setCredentialForm((current) => ({ ...current, sshAuthMode: event.target.value as SshAuthMode }))}
+                          value={credentialForm.sshAuthMode}
+                        >
+                          <option value="password">Password</option>
+                          <option value="privateKeyPath">Private key path</option>
+                          <option value="privateKeyContent">Pasted private key</option>
+                        </select>
+                      </label>
+                      {credentialForm.sshAuthMode === "password" && (
+                        <label>
+                          SSH password
+                          <input
+                            {...technicalInputProps}
+                            onChange={(event) => setCredentialForm((current) => ({ ...current, password: event.target.value }))}
+                            type="password"
+                            value={credentialForm.password}
+                          />
+                        </label>
+                      )}
+                      {credentialForm.sshAuthMode === "privateKeyPath" && (
+                        <div className="field-group">
+                          <span className="field-group__label">SSH key path</span>
+                          <div className="path-input-row">
+                            <input
+                              {...technicalInputProps}
+                              onChange={(event) => setCredentialForm((current) => ({ ...current, sshKeyPath: event.target.value }))}
+                              value={credentialForm.sshKeyPath}
+                            />
+                            <button onClick={() => void browseForCredentialSshKeyPath()} type="button">Browse</button>
+                          </div>
+                        </div>
+                      )}
+                      {credentialForm.sshAuthMode === "privateKeyContent" && (
+                        <label>
+                          SSH private key
+                          <textarea
+                            onChange={(event) => setCredentialForm((current) => ({ ...current, sshPrivateKeyContent: event.target.value }))}
+                            value={credentialForm.sshPrivateKeyContent}
+                          />
+                        </label>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <label>
+                        Domain
+                        <input
+                          {...technicalInputProps}
+                          onChange={(event) => setCredentialForm((current) => ({ ...current, domain: event.target.value }))}
+                          value={credentialForm.domain}
+                        />
+                      </label>
+                      <label>
+                        RDP password
+                        <input
+                          {...technicalInputProps}
+                          onChange={(event) => setCredentialForm((current) => ({ ...current, password: event.target.value }))}
+                          type="password"
+                          value={credentialForm.password}
+                        />
+                      </label>
+                      <label>
+                        RDP security
+                        <select
+                          onChange={(event) => setCredentialForm((current) => ({ ...current, rdpSecurityMode: event.target.value as RdpSecurityMode }))}
+                          value={credentialForm.rdpSecurityMode}
+                        >
+                          {RDP_SECURITY_MODE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </>
+                  )}
+                  <div className="button-row">
+                    <button className="button-primary" onClick={() => void saveCredential()} type="button">Save credential</button>
+                  </div>
+                </section>
+
+                <section className="panel credential-list-panel" aria-label="Saved credentials">
+                  <div className="section-heading">
+                    <h2>Saved credentials</h2>
+                    <StatusPill label={`${credentials.length}`} tone={credentials.length > 0 ? "good" : "neutral"} />
+                  </div>
+                  {credentials.length === 0 ? (
+                    <p className="muted">No credentials saved yet.</p>
+                  ) : (
+                    <div className="credential-list">
+                      {credentials.map((credential) => (
+                        <div className="credential-row" key={credential.id}>
+                          <div>
+                            <strong>{credential.label}</strong>
+                            <span>{credentialKindLabel(credential.kind)}{credential.username ? ` - ${credential.username}` : ""}</span>
+                          </div>
+                          <StatusPill label={credential.isDefault ? "default" : credential.kind} tone={credential.isDefault ? "good" : "neutral"} />
+                          <button onClick={() => void editCredential(credential.id)} type="button">Edit</button>
+                          <button onClick={() => void setDefaultCredential(credential.kind, credential.isDefault ? "" : credential.id)} type="button">
+                            {credential.isDefault ? "Clear default" : "Make default"}
+                          </button>
+                          <button className="button-ghost" onClick={() => void deleteCredential(credential.id)} type="button">Delete</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
+          </section>
+        )}
+
         {activeView === "instances" && (
           <section className="view view--instances" aria-labelledby="instances-title">
             <header className="topbar">
@@ -2113,6 +2621,23 @@ export function App() {
                     {selectedInstanceIds.length > 1 && <span>{selectedInstanceIds.length} selected</span>}
                   </div>
                 </div>
+                {selectedInstance && (
+                  <div className="selected-instance-actions" aria-label={`Selected instance actions for ${selectedInstance.instanceId}`}>
+                    <div className="selected-instance-actions__summary">
+                      <strong>{selectedInstance.name || selectedInstance.instanceId}</strong>
+                      <span>{selectedInstance.instanceId}</span>
+                    </div>
+                    <button
+                      aria-expanded={shouldShowInstanceActionsOverlay}
+                      className="button-secondary selected-instance-actions__details"
+                      onClick={showInstanceActionsOverlay}
+                      type="button"
+                    >
+                      <HidePanelIcon />
+                      <span>Details</span>
+                    </button>
+                  </div>
+                )}
                 <div className="table-frame" aria-busy={isInstancesLoading}>
                   {showInstancesRefreshing && (
                     <div className="table-frame__loading-overlay">
@@ -2289,16 +2814,50 @@ export function App() {
                             </button>
                           </div>
 
+                          {instanceCredentialKind && (
+                            credentialStatus?.unlocked && instanceCredentialOptions.length > 0 ? (
+                              <label>
+                                Saved credential
+                                <select
+                                  onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)}
+                                  value={selectedInstanceCredentialId}
+                                >
+                                  <option value="">Manual entry</option>
+                                  {instanceCredentialOptions.map((credential) => (
+                                    <option key={credential.id} value={credential.id}>
+                                      {credential.isDefault ? `${credential.label} (default)` : credential.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : (
+                              <button
+                                className="button-secondary"
+                                onClick={() => setActiveView("credentials")}
+                                type="button"
+                              >
+                                Create {credentialKindLabel(instanceCredentialKind)} credential
+                              </button>
+                            )
+                          )}
+
                           {instanceConnectionKind === "ssh" && (
                             <>
                               <label>
                                 SSH user
                                 <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
                               </label>
+                              <label>
+                                SSH password
+                                <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
+                              </label>
                               <div className="field-group">
                                 <span className="field-group__label">SSH key path</span>
                                 <div className="path-input-row">
-                                  <input {...technicalInputProps} onChange={(event) => setSshKeyPath(event.target.value)} placeholder="Optional" value={sshKeyPath} />
+                                  <input {...technicalInputProps} onChange={(event) => {
+                                    setSshKeyPath(event.target.value);
+                                    setSshPrivateKeyContent("");
+                                  }} placeholder="Optional" value={sshKeyPath} />
                                   <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
                                 </div>
                               </div>
@@ -2310,6 +2869,10 @@ export function App() {
                               <label>
                                 RDP username
                                 <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                              </label>
+                              <label>
+                                RDP domain
+                                <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
                               </label>
                               <label>
                                 RDP password
@@ -2481,7 +3044,7 @@ export function App() {
                     className="console-tab__close"
                     onClick={(event) => {
                       event.stopPropagation();
-                      void stopConsoleSession(session.id);
+                      void stopConsoleSession(session.id, { manual: true });
                     }}
                     role="button"
                     tabIndex={0}
@@ -2564,6 +3127,10 @@ export function App() {
                         SSH user
                         <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
                       </label>
+                      <label>
+                        SSH password
+                        <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
+                      </label>
                       <div className="field-group">
                         <span className="field-group__label">SSH key path</span>
                         <div className="path-input-row">
@@ -2577,6 +3144,10 @@ export function App() {
                       <label>
                         RDP username
                         <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                      </label>
+                      <label>
+                        RDP domain
+                        <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
                       </label>
                       <label>
                         RDP password

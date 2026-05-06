@@ -7,6 +7,8 @@ export type SessionStatus = "starting" | "active" | "stopping" | "stopped" | "fa
 export type ConsoleSessionKind = "shell" | "ssh" | "rdp";
 export type ConsoleRenderer = "xterm" | "guacamole";
 export type RdpSecurityMode = "auto" | "nla" | "nla-ext" | "tls" | "rdp";
+export type CredentialKind = "ssh" | "rdp";
+export type SshAuthMode = "password" | "privateKeyPath" | "privateKeyContent";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type DiagnosticArea = "dependency" | "aws" | "process" | "launcher" | "security";
 export type ThemeMode = "system" | "light" | "dark";
@@ -146,7 +148,9 @@ export interface ConsoleSessionRequest {
   instanceId: string;
   localPort?: number | null;
   username?: string | null;
+  sshPassword?: string | null;
   sshKeyPath?: string | null;
+  sshPrivateKeyContent?: string | null;
   rdpUsername?: string | null;
   rdpPassword?: string | null;
   rdpSecurityMode?: RdpSecurityMode | null;
@@ -156,9 +160,64 @@ export interface ConsoleSessionRequest {
   height?: number | null;
 }
 
+export interface CredentialStoreStatus {
+  exists: boolean;
+  unlocked: boolean;
+  credentialCount: number;
+  defaultSshCredentialId?: string | null;
+  defaultRdpCredentialId?: string | null;
+}
+
+export interface CredentialSummary {
+  id: string;
+  label: string;
+  kind: CredentialKind;
+  username?: string | null;
+  domain?: string | null;
+  sshAuthMode?: SshAuthMode | null;
+  rdpSecurityMode?: string | null;
+  isDefault: boolean;
+  updatedAt: string;
+}
+
+export interface CredentialRecord {
+  id: string;
+  label: string;
+  kind: CredentialKind;
+  username?: string | null;
+  password?: string | null;
+  domain?: string | null;
+  sshAuthMode?: SshAuthMode | null;
+  sshKeyPath?: string | null;
+  sshPrivateKeyContent?: string | null;
+  rdpSecurityMode?: RdpSecurityMode | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertCredentialRequest {
+  id?: string | null;
+  label: string;
+  kind: CredentialKind;
+  username?: string | null;
+  password?: string | null;
+  domain?: string | null;
+  sshAuthMode?: SshAuthMode | null;
+  sshKeyPath?: string | null;
+  sshPrivateKeyContent?: string | null;
+  rdpSecurityMode?: RdpSecurityMode | null;
+}
+
 export interface ConsoleOutputEvent {
   sessionId: string;
   data: string;
+}
+
+export interface ConsoleSessionEndedEvent {
+  sessionId: string;
+  kind: ConsoleSessionKind;
+  instanceId: string;
+  message: string;
 }
 
 export interface DiagnosticEvent {
