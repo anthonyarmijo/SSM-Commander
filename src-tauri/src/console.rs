@@ -858,22 +858,43 @@ fn handle_guacamole_websocket(
         .map_err(|error| format!("Could not configure Guacamole WebSocket: {error}"))?;
 
     let mut buffer = [0_u8; 8192];
+    let mut guacd_instruction_buffer = Vec::new();
+    let mut websocket_instruction_buffer = Vec::new();
     loop {
         match guacd.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                let payload = String::from_utf8_lossy(&buffer[..read]).to_string();
-                if payload.contains(".error") || payload.to_lowercase().contains("wrong security") {
+                guacd_instruction_buffer.extend_from_slice(&buffer[..read]);
+                let mut websocket_send_failed = false;
+                for payload in drain_complete_instructions(&mut guacd_instruction_buffer) {
+                    if payload.contains(".error")
+                        || payload.to_lowercase().contains("wrong security")
+                    {
+                        config.diagnostics.warning(
+                            DiagnosticArea::Launcher,
+                            format!(
+                                "Embedded RDP guacd reported: {}: {}",
+                                rdp_bridge_diagnostic_message(&config),
+                                payload
+                            ),
+                        );
+                    }
+                    if websocket.send(Message::Text(payload.into())).is_err() {
+                        websocket_send_failed = true;
+                        break;
+                    }
+                }
+                if websocket_send_failed {
+                    break;
+                }
+                if guacd_instruction_buffer.len() > 1_048_576 {
                     config.diagnostics.warning(
                         DiagnosticArea::Launcher,
                         format!(
-                            "Embedded RDP guacd reported: {}: {}",
+                            "Embedded RDP guacd stream buffered more than 1 MiB without a complete instruction: {}",
                             rdp_bridge_diagnostic_message(&config),
-                            payload
                         ),
                     );
-                }
-                if websocket.send(Message::Text(payload.into())).is_err() {
                     break;
                 }
             }
@@ -892,8 +913,10 @@ fn handle_guacamole_websocket(
 
         match websocket.read() {
             Ok(Message::Text(text)) => {
-                for instruction in split_instruction_stream(text.as_ref()) {
-                    if should_forward_client_instruction(instruction) {
+                let text: &str = text.as_ref();
+                websocket_instruction_buffer.extend_from_slice(text.as_bytes());
+                for instruction in drain_complete_instructions(&mut websocket_instruction_buffer) {
+                    if should_forward_client_instruction(&instruction) {
                         let _ = guacd.write_all(instruction.as_bytes());
                     }
                 }
@@ -1099,16 +1122,25 @@ fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig) -> String {
 
 fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
     match arg {
+        version if version.starts_with("VERSION_") => version.to_string(),
         "hostname" => config.hostname.clone(),
         "port" => config.local_port.to_string(),
+        "width" => config.width.to_string(),
+        "height" => config.height.to_string(),
+        "dpi" => "96".to_string(),
         "username" => config.username.clone().unwrap_or_default(),
         "domain" => config.domain.clone().unwrap_or_default(),
         "password" => config.password.clone().unwrap_or_default(),
         "ignore-cert" => "true".to_string(),
         "security" => rdp_security_value(config.security_mode).to_string(),
+        "color-depth" => "32".to_string(),
         "resize-method" => "display-update".to_string(),
         "enable-wallpaper" => "false".to_string(),
         "enable-theming" => "false".to_string(),
+        "disable-bitmap-caching" => "true".to_string(),
+        "disable-offscreen-caching" => "true".to_string(),
+        "disable-glyph-caching" => "true".to_string(),
+        "disable-gfx" => "true".to_string(),
         _ => String::new(),
     }
 }
@@ -1179,16 +1211,42 @@ fn should_forward_client_instruction(instruction: &str) -> bool {
     !instruction.starts_with("0.,") && !instruction.is_empty()
 }
 
-fn split_instruction_stream(input: &str) -> Vec<&str> {
+fn drain_complete_instructions(buffer: &mut Vec<u8>) -> Vec<String> {
     let mut instructions = Vec::new();
-    let mut start = 0;
-    for (index, character) in input.char_indices() {
-        if character == ';' {
-            instructions.push(&input[start..=index]);
-            start = index + 1;
+
+    let mut consumed = 0;
+    while let Some(end) = complete_instruction_end(&buffer[consumed..]) {
+        let end = consumed + end;
+        instructions.push(String::from_utf8_lossy(&buffer[consumed..end]).to_string());
+        consumed = end;
+    }
+
+    if consumed > 0 {
+        buffer.drain(..consumed);
+    }
+
+    instructions
+}
+
+fn complete_instruction_end(input: &[u8]) -> Option<usize> {
+    let mut index = 0;
+
+    loop {
+        let dot = index + input[index..].iter().position(|byte| *byte == b'.')?;
+        let length = std::str::from_utf8(&input[index..dot])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        let value_start = dot + 1;
+        let value_end = value_start.checked_add(length)?;
+        let terminator = *input.get(value_end)?;
+
+        match terminator {
+            b',' => index = value_end + 1,
+            b';' => return Some(value_end + 1),
+            _ => return None,
         }
     }
-    instructions
 }
 
 fn encode_instruction(opcode: &str, args: &[String]) -> String {
@@ -1253,11 +1311,11 @@ fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_ssh_password_prompt, encode_instruction, guacd_rdp_parameter_value,
-        normalize_rdp_credentials, normalize_rdp_security_mode, normalize_rdp_target_host,
-        parse_instruction, rdp_bridge_diagnostic_message, rdp_security_value, ssh_command_args,
-        validate_guacamole_request, write_temp_ssh_key, GuacamoleBridge, RdpBridgeConfig,
-        RdpCredentials, RdpSecurityMode,
+        contains_ssh_password_prompt, drain_complete_instructions, encode_instruction,
+        guacd_rdp_parameter_value, normalize_rdp_credentials, normalize_rdp_security_mode,
+        normalize_rdp_target_host, parse_instruction, rdp_bridge_diagnostic_message,
+        rdp_security_value, ssh_command_args, validate_guacamole_request, write_temp_ssh_key,
+        GuacamoleBridge, RdpBridgeConfig, RdpCredentials, RdpSecurityMode,
     };
     use crate::diagnostics::Diagnostics;
     use std::time::{Duration, Instant};
@@ -1321,6 +1379,45 @@ mod tests {
     }
 
     #[test]
+    fn drains_complete_guacamole_instructions_across_chunks() {
+        let first = encode_instruction("sync", &["12".to_string()]);
+        let second = encode_instruction(
+            "clipboard",
+            &[
+                "1".to_string(),
+                "text/plain".to_string(),
+                "hello;world".to_string(),
+            ],
+        );
+        let combined = format!("{first}{second}");
+        let split_at = first.len() + 12;
+        let mut buffer = combined.as_bytes()[..split_at].to_vec();
+
+        assert_eq!(
+            drain_complete_instructions(&mut buffer),
+            vec![first.clone()]
+        );
+        assert_eq!(buffer, second.as_bytes()[..12]);
+
+        buffer.extend_from_slice(&combined.as_bytes()[split_at..]);
+        assert_eq!(drain_complete_instructions(&mut buffer), vec![second]);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn leaves_partial_guacamole_instruction_buffered() {
+        let encoded = encode_instruction("sync", &["12345".to_string()]);
+        let mut buffer = encoded.as_bytes()[..encoded.len() - 2].to_vec();
+
+        assert!(drain_complete_instructions(&mut buffer).is_empty());
+        assert_eq!(buffer, encoded.as_bytes()[..encoded.len() - 2]);
+
+        buffer.extend_from_slice(&encoded.as_bytes()[encoded.len() - 2..]);
+        assert_eq!(drain_complete_instructions(&mut buffer), vec![encoded]);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
     fn splits_windows_domain_qualified_rdp_username() {
         assert_eq!(
             normalize_rdp_credentials(Some("EXAMPLE\\admin".to_string())),
@@ -1353,6 +1450,38 @@ mod tests {
 
         assert_eq!(guacd_rdp_parameter_value("domain", &config), "EXAMPLE");
         assert_eq!(guacd_rdp_parameter_value("security", &config), "any");
+    }
+
+    #[test]
+    fn passes_rdp_display_and_cache_parameters_to_guacd() {
+        let config = rdp_config(
+            Some("admin"),
+            Some("EXAMPLE"),
+            Some("secret"),
+            RdpSecurityMode::Auto,
+        );
+
+        assert_eq!(
+            guacd_rdp_parameter_value("VERSION_1_5_0", &config),
+            "VERSION_1_5_0"
+        );
+        assert_eq!(guacd_rdp_parameter_value("width", &config), "1280");
+        assert_eq!(guacd_rdp_parameter_value("height", &config), "720");
+        assert_eq!(guacd_rdp_parameter_value("dpi", &config), "96");
+        assert_eq!(guacd_rdp_parameter_value("color-depth", &config), "32");
+        assert_eq!(
+            guacd_rdp_parameter_value("disable-bitmap-caching", &config),
+            "true"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("disable-offscreen-caching", &config),
+            "true"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("disable-glyph-caching", &config),
+            "true"
+        );
+        assert_eq!(guacd_rdp_parameter_value("disable-gfx", &config), "true");
     }
 
     #[test]

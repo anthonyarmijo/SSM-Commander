@@ -2717,33 +2717,7 @@ export function App() {
                     </div>
                   </header>
 
-                  <div className="inspector-card detail-stack">
-                    <div><span>Name</span><strong>{selectedInstance.name || "Unnamed"}</strong></div>
-                    <div><span>Profile</span><strong>{activeProfile || "Not selected"}</strong></div>
-                    <div><span>Region</span><strong>{activeProfileRegion || "No region"}</strong></div>
-                    <div><span>State</span><StatusPill label={selectedInstance.state} tone={selectedInstance.state === "running" ? "good" : selectedInstance.state === "stopped" ? "neutral" : "warn"} /></div>
-                    <div><span>SSM</span><StatusPill label={selectedInstance.ssmStatus} tone={ssmTone(selectedInstance.ssmStatus)} /></div>
-                    <div><span>Private IP</span><strong>{selectedInstance.privateIp || "No private IP"}</strong></div>
-                    {selectedInstance.publicIp && <div><span>Public IP</span><strong>{selectedInstance.publicIp}</strong></div>}
-                    {selectedInstance.vpcId && <div><span>VPC</span><strong>{selectedInstance.vpcId}</strong></div>}
-                    {selectedInstance.subnetId && <div><span>Subnet</span><strong>{selectedInstance.subnetId}</strong></div>}
-                  </div>
-
-                  {selectedInstance.tags.length > 0 && (
-                    <section className="inspector-section">
-                      <h3>Tags</h3>
-                      <div className="inspector-table">
-                        {selectedInstance.tags.slice(0, 5).map((tag) => (
-                          <div key={`${selectedInstance.instanceId}-${tag.key}`}>
-                            <span>{tag.key}</span>
-                            <strong>{tag.value}</strong>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  <section className="inspector-section">
+                  <section className="inspector-section inspector-section--power">
                     <h3>Power</h3>
                     {selectedInstanceIds.length > 1 && <p className="muted">{selectedInstanceIds.length} selected</p>}
                     <div className="action-stack action-stack--inline">
@@ -2764,6 +2738,34 @@ export function App() {
                       </button>
                     </div>
                   </section>
+
+                  <div className="inspector-card detail-stack">
+                    <div><span>Name</span><strong>{selectedInstance.name || "Unnamed"}</strong></div>
+                    <div><span>Profile</span><strong>{activeProfile || "Not selected"}</strong></div>
+                    <div><span>Region</span><strong>{activeProfileRegion || "No region"}</strong></div>
+                    <div><span>SSM</span><StatusPill label={selectedInstance.ssmStatus} tone={ssmTone(selectedInstance.ssmStatus)} /></div>
+                    <div><span>Private IP</span><strong>{selectedInstance.privateIp || "No private IP"}</strong></div>
+                    {selectedInstance.publicIp && <div><span>Public IP</span><strong>{selectedInstance.publicIp}</strong></div>}
+                    {selectedInstance.vpcId && <div><span>VPC</span><strong>{selectedInstance.vpcId}</strong></div>}
+                    {selectedInstance.subnetId && <div><span>Subnet</span><strong>{selectedInstance.subnetId}</strong></div>}
+                  </div>
+
+                  {selectedInstance.tags.length > 0 && (
+                    <details className="inspector-section inspector-section--tags" key={`tags-${selectedInstance.instanceId}`}>
+                      <summary>
+                        <span>Tags</span>
+                        <span>{selectedInstance.tags.length}</span>
+                      </summary>
+                      <div className="inspector-table">
+                        {selectedInstance.tags.slice(0, 5).map((tag) => (
+                          <div key={`${selectedInstance.instanceId}-${tag.key}`}>
+                            <span>{tag.key}</span>
+                            <strong>{tag.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
 
                   <section className="inspector-section connection-actions">
                     <h3>Connection</h3>
@@ -3287,7 +3289,7 @@ function XtermConsole({ session }: { session: ConsoleSessionRecord }) {
 
 function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
   const displayRef = useRef<HTMLDivElement | null>(null);
-  const [error, setError] = useState(session.message ?? "");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const display = displayRef.current;
@@ -3301,10 +3303,12 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
     const element = client.getDisplay().getElement();
     display.appendChild(element);
 
-	    client.onerror = (status: { message?: string }) => {
-	      const message = status.message || "RDP console disconnected.";
-	      setError(session.message ? `${message} ${session.message}` : message);
-	    };
+    tunnel.onerror = (status: { message?: string }) => {
+      setError(status.message || "RDP tunnel disconnected.");
+    };
+    client.onerror = (status: { message?: string }) => {
+      setError(status.message || "RDP console disconnected.");
+    };
     client.connect(`token=${encodeURIComponent(session.connectionToken)}`);
 
     const mouse = new Guacamole.Mouse(element);

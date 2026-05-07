@@ -241,7 +241,9 @@ code {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 270px) minmax(0, 1fr);
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .app-shell--resizing,
@@ -255,7 +257,9 @@ code {
   background: var(--app-bg);
   display: flex;
   flex-direction: column;
+  height: 100vh;
   min-height: 100vh;
+  overflow: auto;
 }
 
 .app-header {
@@ -2856,7 +2860,9 @@ a,
   gap: 0;
   grid-template-columns: minmax(330px, 42%) minmax(360px, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   padding: 0;
   position: relative;
 }
@@ -2871,6 +2877,7 @@ a,
   display: grid;
   gap: 10px;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
   padding: 48px 16px 16px;
 }
 
@@ -2882,6 +2889,7 @@ a,
   flex-direction: column;
   gap: 14px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 72px 24px 24px;
 }
 
@@ -2950,6 +2958,7 @@ a,
   display: grid;
   gap: 5px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 0 2px 28px;
   position: relative;
 }
@@ -3175,8 +3184,56 @@ a,
   gap: 8px;
 }
 
+.inspector-section--power h3 {
+  margin-top: 2px;
+}
+
 .inspector-section h3 {
   margin: 10px 10px 2px;
+}
+
+.inspector-section--tags {
+  background: transparent;
+}
+
+.inspector-section--tags summary {
+  align-items: center;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  font-weight: 650;
+  justify-content: space-between;
+  list-style: none;
+  margin: 10px 10px 2px;
+}
+
+.inspector-section--tags summary::-webkit-details-marker {
+  display: none;
+}
+
+.inspector-section--tags summary::before {
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  content: "";
+  height: 0;
+  margin-right: 8px;
+  transition: transform 120ms ease;
+  width: 0;
+}
+
+.inspector-section--tags[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.inspector-section--tags summary span:first-child {
+  flex: 1;
+}
+
+.inspector-section--tags summary span:last-child {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .resource-pane--inspector label,
@@ -3398,12 +3455,15 @@ a,
   .resource-workspace {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(360px, auto) auto;
+    height: auto;
     min-height: 0;
+    overflow: visible;
   }
 
   .resource-pane--browser,
   .resource-pane--inspector {
     border-right: 0;
+    overflow: visible;
     padding: 18px 14px;
   }
 
