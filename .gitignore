@@ -6,6 +6,8 @@ dist/
 dist-ssr/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/
+src-tauri/resources/macos/lib/
 *.log
 .env
 .env.*

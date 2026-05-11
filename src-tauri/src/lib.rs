@@ -4,6 +4,7 @@ mod console;
 mod credentials;
 mod dependencies;
 mod diagnostics;
+mod guacd;
 mod models;
 mod platform;
 mod ports;
@@ -14,6 +15,7 @@ mod sessions;
 use console::{ConsoleRegistry, GuacamoleBridge};
 use credentials::CredentialStore;
 use diagnostics::Diagnostics;
+use guacd::GuacdSidecar;
 use models::SsoLoginAttempt;
 use process_registry::ProcessRegistry;
 use std::collections::HashMap;
@@ -26,6 +28,7 @@ pub struct AppState {
     consoles: Mutex<ConsoleRegistry>,
     credentials: Mutex<CredentialStore>,
     guacamole_bridge: GuacamoleBridge,
+    guacd_sidecar: GuacdSidecar,
     sso_login_attempts: Mutex<HashMap<String, SsoLoginAttempt>>,
 }
 
@@ -37,6 +40,7 @@ impl Default for AppState {
             consoles: Mutex::new(ConsoleRegistry::default()),
             credentials: Mutex::new(CredentialStore::default()),
             guacamole_bridge: GuacamoleBridge::default(),
+            guacd_sidecar: GuacdSidecar::default(),
             sso_login_attempts: Mutex::new(HashMap::new()),
         }
     }
@@ -99,6 +103,7 @@ pub fn run() {
                         }
                         registry.stop_all(&state.diagnostics);
                     }
+                    state.guacd_sidecar.stop_owned(&state.diagnostics);
                 }
             }
         })

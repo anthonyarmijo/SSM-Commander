@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "build": "tsc && vite build",
-    "tauri:build": "tauri build",
+    "stage:guacd:macos": "node scripts/stage-guacd-macos.mjs",
+    "tauri:build": "node scripts/tauri-build.mjs",
     "test": "vitest run",
     "lint": "tsc --noEmit",
     "scan:secrets": "gitleaks detect --source . --redact --verbose"

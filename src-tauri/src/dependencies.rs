@@ -1,3 +1,4 @@
+use crate::guacd;
 use crate::models::{DependencyCheck, DependencyStatus, EnvironmentState, EnvironmentStatus};
 use std::process::Command;
 
@@ -48,15 +49,7 @@ pub fn check_environment() -> EnvironmentState {
             install_url: None,
             install_label: None,
         },
-        check_tool(
-            "Guacamole RDP bridge",
-            "guacd",
-            &["-v"],
-            false,
-            "Install or bundle guacd to use embedded RDP console tabs. Development builds can use a local guacd listening on 127.0.0.1:4822.",
-            Some("https://guacamole.apache.org/doc/gug/installing-guacamole.html"),
-            Some("Guacamole install guide"),
-        ),
+        check_guacd_bridge(),
         check_tool(
             "Rust toolchain",
             "cargo",
@@ -112,6 +105,51 @@ pub fn check_environment() -> EnvironmentState {
         status,
         platform: std::env::consts::OS.to_string(),
         checks,
+    }
+}
+
+fn check_guacd_bridge() -> DependencyCheck {
+    if guacd::bridge_is_reachable() {
+        return DependencyCheck {
+            name: "Guacamole RDP bridge".to_string(),
+            command: "guacd".to_string(),
+            status: DependencyStatus::Present,
+            version: Some("listening on 127.0.0.1:4822".to_string()),
+            required: false,
+            message: "Detected local bridge".to_string(),
+            remediation: None,
+            install_url: None,
+            install_label: None,
+        };
+    }
+
+    if let Some(version) = guacd::native_guacd_version() {
+        return DependencyCheck {
+            name: "Guacamole RDP bridge".to_string(),
+            command: "guacd".to_string(),
+            status: DependencyStatus::Present,
+            version: Some(version),
+            required: false,
+            message: "Detected native guacd on PATH".to_string(),
+            remediation: None,
+            install_url: None,
+            install_label: None,
+        };
+    }
+
+    DependencyCheck {
+        name: "Guacamole RDP bridge".to_string(),
+        command: "guacd".to_string(),
+        status: DependencyStatus::Missing,
+        version: None,
+        required: false,
+        message: "No local guacd bridge or native guacd command detected".to_string(),
+        remediation: Some(
+            "Packaged macOS builds can start bundled guacd. Development builds can use npm start, a local guacd listening on 127.0.0.1:4822, or native guacd on PATH."
+                .to_string(),
+        ),
+        install_url: Some("https://guacamole.apache.org/doc/gug/installing-guacamole.html".to_string()),
+        install_label: Some("Guacamole install guide".to_string()),
     }
 }
 

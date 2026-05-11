@@ -1,8 +1,8 @@
 use crate::diagnostics::Diagnostics;
+use crate::guacd::{self, GuacdReady};
 use crate::models::{
     ConsoleOutputEvent, ConsoleRenderer, ConsoleSessionEndedEvent, ConsoleSessionKind,
-    ConsoleSessionRecord, ConsoleSessionRequest, DiagnosticArea, DiagnosticSeverity, SessionRecord,
-    SessionStatus,
+    ConsoleSessionRecord, ConsoleSessionRequest, DiagnosticArea, SessionRecord, SessionStatus,
 };
 use chrono::Utc;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -22,8 +22,6 @@ use uuid::Uuid;
 
 const CONSOLE_OUTPUT_EVENT: &str = "console-output";
 const CONSOLE_SESSION_ENDED_EVENT: &str = "console-session-ended";
-const GUACD_HOST: &str = "127.0.0.1";
-const GUACD_PORT: u16 = 4822;
 const DEFAULT_RDP_TARGET_HOST: &str = "127.0.0.1";
 const RDP_TARGET_HOST_ENV: &str = "SSM_COMMANDER_GUACD_RDP_HOST";
 const RDP_BRIDGE_TOKEN_TTL: Duration = Duration::from_secs(120);
@@ -190,6 +188,7 @@ impl GuacamoleBridge {
         security_mode: Option<String>,
         width: Option<u32>,
         height: Option<u32>,
+        guacd_version: Option<String>,
         diagnostics: Diagnostics,
     ) -> Result<(String, String, String), String> {
         let listener_port = self.ensure_listener()?;
@@ -207,7 +206,7 @@ impl GuacamoleBridge {
             security_mode,
             width: width.unwrap_or(1280).max(640),
             height: height.unwrap_or(720).max(480),
-            guacd_version: guacd_version(),
+            guacd_version,
             expires_at: Instant::now() + RDP_BRIDGE_TOKEN_TTL,
             diagnostics,
         };
@@ -275,27 +274,6 @@ impl GuacamoleBridge {
             .map_err(|_| "Guacamole bridge state is unavailable".to_string())?;
         state.port = Some(port);
         Ok(port)
-    }
-}
-
-pub fn guacd_is_available() -> bool {
-    guacd_version().is_some() || TcpStream::connect((GUACD_HOST, GUACD_PORT)).is_ok()
-}
-
-fn guacd_version() -> Option<String> {
-    let output = std::process::Command::new("guacd")
-        .arg("-v")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if version.is_empty() {
-        Some("available".to_string())
-    } else {
-        Some(version)
     }
 }
 
@@ -682,6 +660,7 @@ pub fn rdp_console_session(
     request: &ConsoleSessionRequest,
     tunnel_record: SessionRecord,
     bridge: &GuacamoleBridge,
+    guacd_ready: &GuacdReady,
     diagnostics: &Diagnostics,
 ) -> Result<ManagedConsoleSession, String> {
     let id = Uuid::new_v4().to_string();
@@ -691,47 +670,31 @@ pub fn rdp_console_session(
         .map(|tunnel| tunnel.local_port)
         .ok_or_else(|| "RDP tunnel was not created".to_string())?;
 
-    let (status, bridge_url, connection_token, message) = if guacd_is_available() {
-        match bridge.register_rdp_connection(
-            id.clone(),
-            request.instance_id.clone(),
-            port,
-            request
-                .rdp_username
-                .clone()
-                .or_else(|| request.username.clone()),
-            request.rdp_password.clone(),
-            request.rdp_security_mode.clone(),
-            request.width,
-            request.height,
-            diagnostics.clone(),
-        ) {
-            Ok((url, token, diagnostic_message)) => (
-                SessionStatus::Active,
-                Some(url),
-                Some(token),
-                Some(format!(
-                    "Embedded RDP bridge connected to local guacd. {diagnostic_message}"
-                )),
-            ),
-            Err(error) => (SessionStatus::Failed, None, None, Some(error)),
-        }
-    } else {
-        diagnostics.push(
-            DiagnosticSeverity::Warning,
-            DiagnosticArea::Dependency,
-            "Embedded RDP requires guacd on 127.0.0.1:4822 or a bundled guacd sidecar.".to_string(),
-            None,
-        );
-        (
-            SessionStatus::Failed,
-            None,
-            None,
-            Some(
-                "Embedded RDP requires guacd on 127.0.0.1:4822 or a bundled guacd sidecar."
-                    .to_string(),
-            ),
-        )
+    let (status, bridge_url, connection_token, message) = match bridge.register_rdp_connection(
+        id.clone(),
+        request.instance_id.clone(),
+        port,
+        request
+            .rdp_username
+            .clone()
+            .or_else(|| request.username.clone()),
+        request.rdp_password.clone(),
+        request.rdp_security_mode.clone(),
+        request.width,
+        request.height,
+        guacd_ready.version.clone(),
+        diagnostics.clone(),
+    ) {
+        Ok((url, token, diagnostic_message)) => (
+            SessionStatus::Active,
+            Some(url),
+            Some(token),
+            Some(format!(
+                "{} {diagnostic_message}",
+                guacd_ready.status_message()
+            )),
+        ),
+        Err(error) => (SessionStatus::Failed, None, None, Some(error)),
     };
 
     let record = ConsoleSessionRecord {
@@ -830,7 +793,7 @@ fn handle_guacamole_websocket(
         config
     };
 
-    let mut guacd = TcpStream::connect((GUACD_HOST, GUACD_PORT))
+    let mut guacd = TcpStream::connect((guacd::GUACD_HOST, guacd::GUACD_PORT))
         .map_err(|error| format!("Could not connect to guacd: {error}"))?;
     if let Err(error) = start_guacd_rdp(&mut guacd, &config) {
         config.diagnostics.warning(
@@ -1578,6 +1541,7 @@ mod tests {
                 Some("tls".to_string()),
                 None,
                 None,
+                Some("guacd 1.6.0".to_string()),
                 Diagnostics::default(),
             )
             .unwrap();

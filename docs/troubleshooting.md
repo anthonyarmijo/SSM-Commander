@@ -34,9 +34,10 @@ The instance must be a managed node, the SSM Agent must be running, and IAM perm
 
 ## Embedded RDP Does Not Open
 
-Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app shows
-"Embedded RDP is not ready" when it cannot find a `guacd` binary or connect to a
-bridge on `127.0.0.1:4822`.
+Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app reports a
+failed embedded RDP session when it cannot connect to a bridge on
+`127.0.0.1:4822`, start the bundled macOS sidecar, or start native `guacd` from
+`PATH`.
 
 For the standard local workflow, start the app with:
 
@@ -75,7 +76,23 @@ Native or bundled `guacd` uses `127.0.0.1` as the RDP target host by default.
 Override `SSM_COMMANDER_GUACD_RDP_HOST` only when `guacd` runs somewhere that
 cannot reach host services through loopback.
 
-Packaged builds can use a bundled guacd sidecar when one is available. RDP credentials entered manually in Console are kept in memory only.
+Packaged Apple Silicon DMGs can use a bundled `guacd` sidecar when one is
+available. The app prefers an existing bridge on `127.0.0.1:4822`; otherwise it
+starts the bundled sidecar with `guacd -f -b 127.0.0.1 -l 4822` and stops that
+owned process on shutdown. RDP credentials entered manually in Console are kept
+in memory only.
+
+If a packaged build does not include embedded RDP support, re-run:
+
+```sh
+npm run stage:guacd:macos
+npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
+```
+
+The `tauri:build` script sets CI mode on macOS so Tauri skips Finder
+AppleScript DMG decoration. This avoids local/headless builds hanging in
+`bundle_dmg.sh`; the generated DMG still contains the app, Applications link,
+bundled `guacd`, and staged dylibs.
 
 For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
 for example `EXAMPLE\admin`. Embedded RDP splits that into Guacamole's separate

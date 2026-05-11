@@ -30,7 +30,7 @@ Required:
 Recommended, depending on your workflow:
 
 - OpenSSH
-- Docker for the one-command local dev workflow, or a native `guacd` binary for manual embedded RDP development
+- Docker for the one-command local dev workflow, a native `guacd` binary for manual embedded RDP development, or the bundled `guacd` sidecar in packaged macOS builds
 - FreeRDP on macOS or the native Remote Desktop client on Windows for external RDP fallback
 
 Development builds also require Node.js, npm, and Rust.
@@ -70,6 +70,32 @@ Advanced/manual alternatives:
 npm run tauri:dev  # raw Tauri dev mode, no Docker or guacd lifecycle management
 npm run dev        # frontend-only Vite server
 ```
+
+## macOS DMG Builds
+
+Apple Silicon DMG builds bundle a native Apache Guacamole `guacd` sidecar for
+embedded RDP. The generated sidecar artifacts are intentionally ignored by git;
+stage them before release packaging:
+
+```sh
+npm run stage:guacd:macos
+npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
+```
+
+The packaged app first uses any `guacd` already listening on `127.0.0.1:4822`.
+If none is reachable, it starts the bundled sidecar with
+`guacd -f -b 127.0.0.1 -l 4822` and stops that owned process on app shutdown.
+FreeRDP remains only the external RDP fallback.
+
+Signing and notarization are configured through environment variables instead
+of committed values. Use `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, and
+`APPLE_CERTIFICATE_PASSWORD` for signing in CI, plus either
+`APPLE_API_ISSUER`, `APPLE_API_KEY`, and `APPLE_API_KEY_PATH` for App Store
+Connect API notarization or `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`
+for Apple ID notarization. See Tauri's docs for
+[external binaries](https://tauri.app/develop/sidecar/),
+[macOS signing and notarization](https://tauri.app/distribute/sign/macos/), and
+[platform-specific config](https://v2.tauri.app/ko/reference/config/).
 
 Frontend checks:
 

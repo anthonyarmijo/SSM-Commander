@@ -12,7 +12,7 @@ Required:
 
 Recommended:
 
-- Docker for `npm start`, or a native `guacd` binary for manual embedded RDP console tabs during development
+- Docker for `npm start`, a native `guacd` binary for manual embedded RDP console tabs during development, or the bundled `guacd` sidecar in packaged macOS builds
 - FreeRDP for external RDP fallback
 
 Example Homebrew installs:
@@ -37,9 +37,10 @@ container when you quit. The launcher also sets
 to SSM tunnel ports opened on the host.
 
 For manual development, the app expects `guacd` to be reachable on
-`127.0.0.1:4822`; packaged builds can also use a bundled sidecar when one is
-available. Homebrew may not provide a `guacamole-server` formula on macOS, so
-the recommended manual fallback is to run the official `guacd` container:
+`127.0.0.1:4822`. Packaged Apple Silicon DMGs can start a bundled native
+sidecar when no bridge is already reachable. Homebrew may not provide a
+`guacamole-server` formula on macOS, so the recommended manual fallback is to
+run the official `guacd` container:
 
 ```sh
 docker run --rm --name ssm-commander-guacd \
@@ -63,6 +64,39 @@ guacd -f -b 127.0.0.1 -l 4822
 Native or bundled `guacd` targets `127.0.0.1` by default. Set
 `SSM_COMMANDER_GUACD_RDP_HOST` only if your bridge runs outside the host network
 namespace and needs a different route back to the local SSM tunnel.
+
+To stage the native sidecar for Apple Silicon packaging, install the build
+dependencies first:
+
+```sh
+brew install cairo freerdp jpeg-turbo libpng openssl@3 ossp-uuid pkgconf
+```
+
+Then run:
+
+```sh
+npm run stage:guacd:macos
+file src-tauri/binaries/guacd-aarch64-apple-darwin
+otool -L src-tauri/binaries/guacd-aarch64-apple-darwin
+```
+
+The staging script builds Apache Guacamole Server, copies the RDP-capable
+`guacd` binary to `src-tauri/binaries/`, stages required dylibs under
+`src-tauri/resources/macos/lib/`, and fails if relocatable library paths still
+point at Homebrew. Generated sidecar files are ignored by git.
+
+The macOS DMG release build is:
+
+```sh
+npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
+```
+
+Use environment variables for Apple signing and notarization secrets. Do not
+commit certificates, private keys, app-specific passwords, or API keys. Tauri
+uses `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, and either App Store Connect API variables
+`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` or Apple ID variables
+`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
 
 Development builds also require Rust:
 

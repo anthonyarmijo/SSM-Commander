@@ -35,6 +35,33 @@ git fsck --no-reflogs --full
 
 Also manually inspect generated screenshots, docs, release notes, and the final `git status --short --branch` before publishing.
 
+## Apple Silicon macOS DMG
+
+Stage the generated Apache Guacamole `guacd` sidecar before building the DMG:
+
+```sh
+npm run stage:guacd:macos
+file src-tauri/binaries/guacd-aarch64-apple-darwin
+otool -L src-tauri/binaries/guacd-aarch64-apple-darwin
+npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
+```
+
+Confirm `otool -L` output for `guacd` and staged dylibs does not reference
+`/opt/homebrew` or `/usr/local/opt`. Generated files under
+`src-tauri/binaries/` and `src-tauri/resources/macos/lib/` are local release
+artifacts and should not be committed.
+
+Configure signing and notarization with environment variables only:
+`APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and
+either `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` or `APPLE_ID`,
+`APPLE_PASSWORD`, `APPLE_TEAM_ID`. Do not commit certificates, private keys,
+notarization secrets, Apple credentials, or raw local credentials.
+
+Reference Tauri's docs for
+[external binaries](https://tauri.app/develop/sidecar/),
+[macOS signing and notarization](https://tauri.app/distribute/sign/macos/), and
+[platform-specific config](https://v2.tauri.app/ko/reference/config/).
+
 ## Tagging v1.0
 
 Create the launch tag only after the release commit is verified:

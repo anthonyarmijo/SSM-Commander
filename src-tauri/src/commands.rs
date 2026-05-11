@@ -570,25 +570,27 @@ pub fn start_console_session(
         return Ok(registry.insert(managed_session));
     }
 
-    if matches!(request.kind, crate::models::ConsoleSessionKind::Rdp)
-        && !console::guacd_is_available()
-    {
-        state.diagnostics.push(
-            crate::models::DiagnosticSeverity::Warning,
-            DiagnosticArea::Dependency,
-            "Embedded RDP requires guacd on 127.0.0.1:4822 or a bundled guacd sidecar.".to_string(),
-            None,
-        );
-        let managed_session = console::failed_rdp_console_session(
-            &request,
-            "Embedded RDP requires guacd on 127.0.0.1:4822 or a bundled guacd sidecar.".to_string(),
-        );
-        let mut registry = state
-            .consoles
-            .lock()
-            .map_err(|_| "Console registry is unavailable".to_string())?;
-        return Ok(registry.insert(managed_session));
-    }
+    let guacd_ready = if matches!(request.kind, crate::models::ConsoleSessionKind::Rdp) {
+        match state.guacd_sidecar.ensure_ready(&app, &state.diagnostics) {
+            Ok(ready) => Some(ready),
+            Err(error) => {
+                state.diagnostics.push(
+                    crate::models::DiagnosticSeverity::Warning,
+                    DiagnosticArea::Dependency,
+                    error.clone(),
+                    None,
+                );
+                let managed_session = console::failed_rdp_console_session(&request, error);
+                let mut registry = state
+                    .consoles
+                    .lock()
+                    .map_err(|_| "Console registry is unavailable".to_string())?;
+                return Ok(registry.insert(managed_session));
+            }
+        }
+    } else {
+        None
+    };
 
     hydrate_console_request_credentials(&mut request, &state)?;
 
@@ -635,6 +637,9 @@ pub fn start_console_session(
             &request,
             tunnel_record,
             &state.guacamole_bridge,
+            guacd_ready
+                .as_ref()
+                .ok_or_else(|| "guacd readiness was not checked for RDP session".to_string())?,
             &state.diagnostics,
         ),
     }?;
