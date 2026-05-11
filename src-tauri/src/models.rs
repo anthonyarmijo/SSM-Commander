@@ -376,6 +376,16 @@ pub struct UserPreferences {
     pub sidebar_width: Option<u16>,
     pub instance_table_visible_columns: Option<Vec<String>>,
     pub instance_table_column_widths: Option<std::collections::HashMap<String, u16>>,
+    pub profile_validation_cache:
+        Option<std::collections::HashMap<String, CachedProfileValidation>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedProfileValidation {
+    pub account: String,
+    pub message: String,
+    pub validated_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

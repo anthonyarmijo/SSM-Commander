@@ -20,11 +20,17 @@ impl ProcessRegistry {
         &mut self,
         command: &str,
         args: &[String],
+        path: Option<&str>,
         mut record: SessionRecord,
         diagnostics: &Diagnostics,
     ) -> Result<SessionRecord, String> {
-        let mut child = Command::new(command)
-            .args(args)
+        let mut command_builder = Command::new(command);
+        command_builder.args(args);
+        if let Some(path) = path {
+            command_builder.env("PATH", path);
+        }
+
+        let mut child = command_builder
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

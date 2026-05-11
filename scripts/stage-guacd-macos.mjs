@@ -18,8 +18,11 @@ const binariesDir = path.join(repoRoot, "src-tauri", "binaries");
 const resourcesLibDir = path.join(repoRoot, "src-tauri", "resources", "macos", "lib");
 const stagedGuacd = path.join(binariesDir, `guacd-${targetTriple}`);
 const prefix = path.join(buildRoot, `install-${version}`);
+const freerdpPluginDir = path.join(prefix, "lib", "freerdp3");
 const sourceDir = path.join(buildRoot, `guacamole-server-${version}`);
 const tarball = path.join(buildRoot, `guacamole-server-${version}.tar.gz`);
+const forceRebuild = process.env.GUACD_FORCE_REBUILD === "1";
+const placeholderMarker = "SSM_COMMANDER_GENERATED_GUACD_PLACEHOLDER";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -100,7 +103,10 @@ function replaceInFile(file, replacements) {
 
 function patchSourceForMacos() {
   const flagSource = path.join(sourceDir, "src", "libguac", "flag.c");
+  const rdpHeader = path.join(sourceDir, "src", "protocols", "rdp", "rdp.h");
+  const rdpSource = path.join(sourceDir, "src", "protocols", "rdp", "rdp.c");
   const tcpSource = path.join(sourceDir, "src", "libguac", "tcp.c");
+  const fipsHeader = path.join(sourceDir, "src", "libguac", "guacamole", "fips.h");
   replaceInFile(flagSource, [
     [
       "    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);\n",
@@ -117,6 +123,31 @@ function patchSourceForMacos() {
       "#ifdef EBADFD\n    int fd = EBADFD;\n#else\n    int fd = EBADF;\n#endif\n",
     ],
   ]);
+  replaceInFile(rdpHeader, [
+    [
+      "#include <freerdp/freerdp.h>\n",
+      "#include <freerdp/freerdp.h>\n#include <freerdp/version.h>\n",
+    ],
+  ]);
+  replaceInFile(rdpSource, [
+    [
+      "\n}\n\n#ifdef HAVE_FREERDP_VERIFYCERTIFICATEEX\n",
+      "\n}\n\n#if defined(FREERDP_VERSION_MAJOR) && FREERDP_VERSION_MAJOR >= 3\nstatic BOOL rdp_freerdp_authenticate_ex(freerdp* instance, char** username,\n        char** password, char** domain, rdp_auth_reason reason) {\n\n    (void) reason;\n    return rdp_freerdp_authenticate(instance, username, password, domain);\n\n}\n#endif\n\n#ifdef HAVE_FREERDP_VERIFYCERTIFICATEEX\n",
+    ],
+    [
+      "    rdp_inst->PreConnect = rdp_freerdp_pre_connect;\n    rdp_inst->Authenticate = rdp_freerdp_authenticate;\n\n#ifdef HAVE_FREERDP_VERIFYCERTIFICATEEX\n",
+      "    rdp_inst->PreConnect = rdp_freerdp_pre_connect;\n#if defined(FREERDP_VERSION_MAJOR) && FREERDP_VERSION_MAJOR >= 3\n    rdp_inst->AuthenticateEx = rdp_freerdp_authenticate_ex;\n#else\n    rdp_inst->Authenticate = rdp_freerdp_authenticate;\n#endif\n\n#ifdef HAVE_FREERDP_VERIFYCERTIFICATEEX\n",
+    ],
+  ]);
+  ensureTrailingNewline(fipsHeader);
+}
+
+function ensureTrailingNewline(file) {
+  const contents = fs.readFileSync(file);
+  if (contents.length === 0 || contents[contents.length - 1] === 0x0a) {
+    return;
+  }
+  fs.appendFileSync(file, "\n");
 }
 
 function configureOptions(help) {
@@ -128,8 +159,15 @@ function configureOptions(help) {
     "--disable-telnet",
     "--disable-vnc",
     "--with-freerdp",
+    `--with-freerdp-plugin-dir=${freerdpPluginDir}`,
   ];
-  return desired.filter((option) => help.includes(option));
+  return desired.filter((option) => configureHelpIncludesOption(help, option));
+}
+
+function configureHelpIncludesOption(help, option) {
+  const flag = option.split("=")[0];
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|\\s)${escaped}(=|\\s|$)`).test(help);
 }
 
 function buildGuacd() {
@@ -241,11 +279,33 @@ function copyProtocolPlugins() {
   }
 
   for (const name of pluginNames) {
-    const src = fs.realpathSync(path.join(libDir, name));
-    const target = path.join(resourcesLibDir, path.basename(src));
-    fs.copyFileSync(src, target);
-    fs.chmodSync(target, 0o755);
+    const original = path.join(libDir, name);
+    const src = fs.realpathSync(original);
+    copyExecutableFile(src, path.join(resourcesLibDir, path.basename(src)));
+
+    const unversioned = path.join(resourcesLibDir, name);
+    if (path.basename(src) !== name) {
+      copyExecutableFile(src, unversioned);
+    }
+
+    if (name.startsWith("libguac-client-") && name.endsWith(".dylib")) {
+      copyExecutableFile(src, path.join(resourcesLibDir, name.replace(/\.dylib$/, ".so")));
+    }
   }
+
+  if (!fs.existsSync(freerdpPluginDir)) {
+    return;
+  }
+
+  for (const name of fs.readdirSync(freerdpPluginDir).filter((name) => name.endsWith(".so"))) {
+    const src = fs.realpathSync(path.join(freerdpPluginDir, name));
+    copyExecutableFile(src, path.join(resourcesLibDir, path.basename(src)));
+  }
+}
+
+function copyExecutableFile(src, target) {
+  fs.copyFileSync(src, target);
+  fs.chmodSync(target, 0o755);
 }
 
 function rewriteInstallNames(files, forbiddenPrefixes) {
@@ -290,6 +350,12 @@ function adHocSign(files) {
 }
 
 function verifyStagedGuacd() {
+  for (const required of ["libguac-client-rdp.so", "libguac-client-rdp.dylib"]) {
+    if (!fs.existsSync(path.join(resourcesLibDir, required))) {
+      throw new Error(`Staged guacd is missing required RDP plugin file: ${required}`);
+    }
+  }
+
   const tempBundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ssm-guacd-verify-"));
   const macosDir = path.join(tempBundleRoot, "Contents", "MacOS");
   const resourcesDir = path.join(tempBundleRoot, "Contents", "Resources");
@@ -304,6 +370,33 @@ function verifyStagedGuacd() {
     run(tempGuacd, ["-v"]);
   } finally {
     fs.rmSync(tempBundleRoot, { recursive: true, force: true });
+  }
+}
+
+function hasRealStagedGuacd() {
+  if (!fs.existsSync(stagedGuacd)) {
+    return false;
+  }
+  return !fs.readFileSync(stagedGuacd, "utf8").includes(placeholderMarker);
+}
+
+function canReuseStagedArtifacts() {
+  return !forceRebuild && hasRealStagedGuacd() && stagedLibs().length > 0;
+}
+
+function tryReuseStagedArtifacts() {
+  if (!canReuseStagedArtifacts()) {
+    return false;
+  }
+
+  try {
+    verifyStagedGuacd();
+    console.log(`Reusing staged ${stagedGuacd}`);
+    console.log(`Reusing staged dylibs in ${resourcesLibDir}`);
+    return true;
+  } catch (error) {
+    console.warn(`Could not reuse staged guacd; rebuilding: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
   }
 }
 
@@ -324,30 +417,42 @@ function stageArtifacts() {
 
   const brewRoot = output("brew", ["--prefix"]);
   const forbiddenPrefixes = [prefix, brewRoot, "/opt/homebrew", "/usr/local/opt"];
-  copyDylibClosure([stagedGuacd, ...stagedLibs()], forbiddenPrefixes);
+  copyDylibClosure([stagedGuacd, ...stagedMachOs()], forbiddenPrefixes);
 
-  let files = [stagedGuacd, ...stagedLibs()];
+  let files = [stagedGuacd, ...stagedMachOs()];
   rewriteInstallNames(files, forbiddenPrefixes);
 
-  files = [stagedGuacd, ...stagedLibs()];
+  files = [stagedGuacd, ...stagedMachOs()];
   validateNoHomebrewLinks(files, forbiddenPrefixes);
-  adHocSign([...stagedLibs(), stagedGuacd]);
+  adHocSign([...stagedMachOs(), stagedGuacd]);
   verifyStagedGuacd();
 }
 
 function stagedLibs() {
+  return stagedResourcesWithExtensions([".dylib"]);
+}
+
+function stagedMachOs() {
+  return stagedResourcesWithExtensions([".dylib", ".so"]);
+}
+
+function stagedResourcesWithExtensions(extensions) {
   if (!fs.existsSync(resourcesLibDir)) {
     return [];
   }
   return fs
     .readdirSync(resourcesLibDir)
-    .filter((name) => name.endsWith(".dylib"))
+    .filter((name) => extensions.some((extension) => name.endsWith(extension)))
     .map((name) => path.join(resourcesLibDir, name));
 }
 
 function main() {
   if (process.platform !== "darwin" || process.arch !== "arm64") {
     throw new Error("This script must run on Apple Silicon macOS for aarch64-apple-darwin.");
+  }
+
+  if (tryReuseStagedArtifacts()) {
+    return;
   }
 
   for (const command of ["brew", "codesign", "curl", "make", "otool", "install_name_tool"]) {

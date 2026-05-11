@@ -1,7 +1,7 @@
 use crate::diagnostics::Diagnostics;
 use crate::models::{DiagnosticArea, DiagnosticSeverity};
 use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -13,25 +13,36 @@ pub const GUACD_HOST: &str = "127.0.0.1";
 pub const GUACD_PORT: u16 = 4822;
 const GUACD_START_TIMEOUT: Duration = Duration::from_secs(6);
 const GUACD_PATH_ENV: &str = "SSM_COMMANDER_GUACD_PATH";
+#[cfg(target_os = "macos")]
+const OBJC_FORK_SAFETY_ENV: &str = "OBJC_DISABLE_INITIALIZE_FORK_SAFETY";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuacdReady {
     pub source: GuacdSource,
     pub version: Option<String>,
+    pub port: u16,
 }
 
 impl GuacdReady {
     pub fn status_message(&self) -> String {
         match self.source {
             GuacdSource::ExistingBridge => {
-                "Embedded RDP bridge is using guacd already listening on 127.0.0.1:4822."
-                    .to_string()
+                format!(
+                    "Embedded RDP bridge is using guacd already listening on 127.0.0.1:{}.",
+                    self.port
+                )
             }
             GuacdSource::BundledSidecar => {
-                "Embedded RDP bridge started bundled guacd on 127.0.0.1:4822.".to_string()
+                format!(
+                    "Embedded RDP bridge started bundled guacd on 127.0.0.1:{}.",
+                    self.port
+                )
             }
             GuacdSource::NativePath => {
-                "Embedded RDP bridge started native guacd from PATH on 127.0.0.1:4822.".to_string()
+                format!(
+                    "Embedded RDP bridge started native guacd from PATH on 127.0.0.1:{}.",
+                    self.port
+                )
             }
         }
     }
@@ -68,6 +79,7 @@ struct GuacdLaunchCandidate {
     command: PathBuf,
     source: GuacdSource,
     lib_dir: Option<PathBuf>,
+    port: u16,
 }
 
 impl GuacdSidecar {
@@ -82,21 +94,22 @@ impl GuacdSidecar {
             .map_err(|_| "guacd sidecar state is unavailable".to_string())?;
         reap_finished_process(&mut state);
         if let (Some(_), Some(ready)) = (&state.owned_process, &state.ready) {
-            if bridge_is_reachable() {
+            if bridge_is_reachable_on(ready.port) {
                 return Ok(ready.clone());
             }
         }
 
-        if bridge_is_reachable() {
+        let candidates = guacd_launch_candidates(app);
+        if candidates.is_empty() && bridge_is_reachable() {
             let ready = GuacdReady {
                 source: GuacdSource::ExistingBridge,
                 version: native_guacd_version(),
+                port: GUACD_PORT,
             };
             diagnostics.info(DiagnosticArea::Dependency, ready.status_message());
             return Ok(ready);
         }
 
-        let candidates = guacd_launch_candidates(app);
         if candidates.is_empty() {
             return Err(
                 "Embedded RDP requires guacd on 127.0.0.1:4822, a bundled guacd sidecar, or native guacd on PATH."
@@ -160,11 +173,19 @@ fn reap_finished_process(state: &mut GuacdSidecarState) {
 }
 
 pub fn bridge_is_reachable() -> bool {
-    TcpStream::connect((GUACD_HOST, GUACD_PORT)).is_ok()
+    bridge_is_reachable_on(GUACD_PORT)
+}
+
+pub fn bridge_is_reachable_on(port: u16) -> bool {
+    TcpStream::connect((GUACD_HOST, port)).is_ok()
 }
 
 pub fn native_guacd_version() -> Option<String> {
     guacd_command_version(Path::new("guacd"))
+}
+
+pub fn bundled_guacd_version(app: &AppHandle) -> Option<String> {
+    resolve_bundled_guacd(app).and_then(|(command, _)| guacd_command_version(&command))
 }
 
 fn guacd_command_version(command: &Path) -> Option<String> {
@@ -186,14 +207,23 @@ fn guacd_launch_candidates(app: &AppHandle) -> Vec<GuacdLaunchCandidate> {
         command,
         source: GuacdSource::BundledSidecar,
         lib_dir,
+        port: allocate_guacd_port(),
     });
     let native = native_guacd_version().map(|_| GuacdLaunchCandidate {
         command: PathBuf::from("guacd"),
         source: GuacdSource::NativePath,
         lib_dir: None,
+        port: allocate_guacd_port(),
     });
 
     [bundled, native].into_iter().flatten().collect()
+}
+
+fn allocate_guacd_port() -> u16 {
+    TcpListener::bind((GUACD_HOST, 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok().map(|address| address.port()))
+        .unwrap_or(GUACD_PORT)
 }
 
 fn resolve_bundled_guacd(app: &AppHandle) -> Option<(PathBuf, Option<PathBuf>)> {
@@ -242,18 +272,29 @@ fn start_guacd_candidate(
     let mut command = Command::new(&candidate.command);
     command
         .arg("-f")
+        .arg("-L")
+        .arg("debug")
         .arg("-b")
         .arg(GUACD_HOST)
         .arg("-l")
-        .arg(GUACD_PORT.to_string())
+        .arg(candidate.port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    #[cfg(target_os = "macos")]
+    {
+        // guacd forks per-connection workers; bundled FreeRDP dependencies can
+        // touch Objective-C runtime state on macOS and trip fork-safety guards.
+        command.env(OBJC_FORK_SAFETY_ENV, "YES");
+    }
+
     if let Some(lib_dir) = candidate.lib_dir.as_ref() {
+        command.current_dir(lib_dir);
         command.env("DYLD_LIBRARY_PATH", lib_dir);
         command.env("DYLD_FALLBACK_LIBRARY_PATH", lib_dir);
         command.env("GUACD_PLUGIN_DIR", lib_dir);
         command.env("GUACD_PLUGIN_PATH", lib_dir);
+        command.env("FREERDP_PLUGIN_PATH", lib_dir);
     }
 
     let mut child = command.spawn().map_err(|error| {
@@ -266,17 +307,19 @@ fn start_guacd_candidate(
 
     let started_at = Instant::now();
     while started_at.elapsed() < GUACD_START_TIMEOUT {
-        if bridge_is_reachable() {
+        if bridge_is_reachable_on(candidate.port) {
             let ready = GuacdReady {
                 source: candidate.source,
                 version,
+                port: candidate.port,
             };
             diagnostics.info(DiagnosticArea::Dependency, ready.status_message());
             return Ok((ready, child));
         }
         if let Ok(Some(status)) = child.try_wait() {
             return Err(format!(
-                "guacd exited before listening on 127.0.0.1:4822: {status}"
+                "guacd exited before listening on 127.0.0.1:{}: {status}",
+                candidate.port
             ));
         }
         thread::sleep(Duration::from_millis(100));
@@ -284,7 +327,10 @@ fn start_guacd_candidate(
 
     let _ = child.kill();
     let _ = child.wait();
-    Err("Timed out waiting for guacd to listen on 127.0.0.1:4822.".to_string())
+    Err(format!(
+        "Timed out waiting for guacd to listen on 127.0.0.1:{}.",
+        candidate.port
+    ))
 }
 
 fn attach_guacd_logs(child: &mut Child, diagnostics: &Diagnostics) {

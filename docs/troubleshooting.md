@@ -6,6 +6,12 @@ Run the environment check in Initialize. Required dependencies are AWS CLI v2 an
 
 ## Profile Validation Fails
 
+The Initialize page discovers profiles by reading the standard AWS shared files
+directly: `~/.aws/config` and `~/.aws/credentials`. On macOS, packaged builds
+also look for AWS CLI tools in common Homebrew and system locations so launching
+the app from Finder or `open` does not require modifying your shell startup
+files.
+
 Try:
 
 ```sh
@@ -35,9 +41,7 @@ The instance must be a managed node, the SSM Agent must be running, and IAM perm
 ## Embedded RDP Does Not Open
 
 Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app reports a
-failed embedded RDP session when it cannot connect to a bridge on
-`127.0.0.1:4822`, start the bundled macOS sidecar, or start native `guacd` from
-`PATH`.
+failed embedded RDP session when it cannot start or reach a local bridge.
 
 For the standard local workflow, start the app with:
 
@@ -74,13 +78,14 @@ guacd -f -b 127.0.0.1 -l 4822
 
 Native or bundled `guacd` uses `127.0.0.1` as the RDP target host by default.
 Override `SSM_COMMANDER_GUACD_RDP_HOST` only when `guacd` runs somewhere that
-cannot reach host services through loopback.
+cannot reach host services through loopback, such as a manually managed Docker
+container.
 
 Packaged Apple Silicon DMGs can use a bundled `guacd` sidecar when one is
-available. The app prefers an existing bridge on `127.0.0.1:4822`; otherwise it
-starts the bundled sidecar with `guacd -f -b 127.0.0.1 -l 4822` and stops that
-owned process on shutdown. RDP credentials entered manually in Console are kept
-in memory only.
+available. The app starts the bundled sidecar on a private loopback port and
+stops that owned process on shutdown. Development builds can still use an
+existing bridge on `127.0.0.1:4822` when no bundled sidecar is available. RDP
+credentials entered manually in Console are kept in memory only.
 
 If a packaged build does not include embedded RDP support, re-run:
 

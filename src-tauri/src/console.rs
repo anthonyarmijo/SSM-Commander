@@ -25,6 +25,7 @@ const CONSOLE_SESSION_ENDED_EVENT: &str = "console-session-ended";
 const DEFAULT_RDP_TARGET_HOST: &str = "127.0.0.1";
 const RDP_TARGET_HOST_ENV: &str = "SSM_COMMANDER_GUACD_RDP_HOST";
 const RDP_BRIDGE_TOKEN_TTL: Duration = Duration::from_secs(120);
+const RDP_GUACD_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 pub struct ConsoleRegistry {
@@ -158,6 +159,7 @@ struct RdpBridgeConfig {
     width: u32,
     height: u32,
     guacd_version: Option<String>,
+    guacd_port: u16,
     expires_at: Instant,
     diagnostics: Diagnostics,
 }
@@ -189,6 +191,7 @@ impl GuacamoleBridge {
         width: Option<u32>,
         height: Option<u32>,
         guacd_version: Option<String>,
+        guacd_port: u16,
         diagnostics: Diagnostics,
     ) -> Result<(String, String, String), String> {
         let listener_port = self.ensure_listener()?;
@@ -207,6 +210,7 @@ impl GuacamoleBridge {
             width: width.unwrap_or(1280).max(640),
             height: height.unwrap_or(720).max(480),
             guacd_version,
+            guacd_port,
             expires_at: Instant::now() + RDP_BRIDGE_TOKEN_TTL,
             diagnostics,
         };
@@ -683,6 +687,7 @@ pub fn rdp_console_session(
         request.width,
         request.height,
         guacd_ready.version.clone(),
+        guacd_ready.port,
         diagnostics.clone(),
     ) {
         Ok((url, token, diagnostic_message)) => (
@@ -793,19 +798,22 @@ fn handle_guacamole_websocket(
         config
     };
 
-    let mut guacd = TcpStream::connect((guacd::GUACD_HOST, guacd::GUACD_PORT))
+    let mut guacd = TcpStream::connect((guacd::GUACD_HOST, config.guacd_port))
         .map_err(|error| format!("Could not connect to guacd: {error}"))?;
-    if let Err(error) = start_guacd_rdp(&mut guacd, &config) {
-        config.diagnostics.warning(
-            DiagnosticArea::Launcher,
-            format!(
-                "Embedded RDP guacd connection failed: {}: {}",
-                rdp_bridge_diagnostic_message(&config),
-                error,
-            ),
-        );
-        return Err(error);
-    }
+    match start_guacd_rdp(&mut guacd, &config) {
+        Ok(()) => {}
+        Err(error) => {
+            config.diagnostics.warning(
+                DiagnosticArea::Launcher,
+                format!(
+                    "Embedded RDP guacd connection failed: {}: {}",
+                    rdp_bridge_diagnostic_message(&config),
+                    error,
+                ),
+            );
+            return Err(error);
+        }
+    };
 
     let uuid_instruction = encode_instruction("", &[Uuid::new_v4().to_string()]);
     websocket
@@ -825,11 +833,21 @@ fn handle_guacamole_websocket(
     let mut websocket_instruction_buffer = Vec::new();
     loop {
         match guacd.read(&mut buffer) {
-            Ok(0) => break,
+            Ok(0) => {
+                config.diagnostics.info(
+                    DiagnosticArea::Launcher,
+                    format!(
+                        "Embedded RDP guacd stream closed for sessionId={}, instanceId={}",
+                        config.session_id, config.instance_id
+                    ),
+                );
+                break;
+            }
             Ok(read) => {
                 guacd_instruction_buffer.extend_from_slice(&buffer[..read]);
                 let mut websocket_send_failed = false;
                 for payload in drain_complete_instructions(&mut guacd_instruction_buffer) {
+                    log_safe_guacamole_opcode(&config, "guacd-to-browser", &payload);
                     if payload.contains(".error")
                         || payload.to_lowercase().contains("wrong security")
                     {
@@ -879,12 +897,24 @@ fn handle_guacamole_websocket(
                 let text: &str = text.as_ref();
                 websocket_instruction_buffer.extend_from_slice(text.as_bytes());
                 for instruction in drain_complete_instructions(&mut websocket_instruction_buffer) {
-                    if should_forward_client_instruction(&instruction) {
+                    log_safe_guacamole_opcode(&config, "browser-to-guacd", &instruction);
+                    if should_echo_tunnel_instruction(&instruction) {
+                        let _ = websocket.send(Message::Text(instruction.into()));
+                    } else if should_forward_client_instruction(&instruction) {
                         let _ = guacd.write_all(instruction.as_bytes());
                     }
                 }
             }
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Close(frame)) => {
+                config.diagnostics.info(
+                    DiagnosticArea::Launcher,
+                    format!(
+                        "Embedded RDP WebSocket closed for sessionId={}, instanceId={}: {:?}",
+                        config.session_id, config.instance_id, frame
+                    ),
+                );
+                break;
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -1079,7 +1109,11 @@ fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig) -> String {
             "missing"
         },
         rdp_security_label(config.security_mode),
-        config.guacd_version.as_deref().unwrap_or("unavailable"),
+        format!(
+            "{} on 127.0.0.1:{}",
+            config.guacd_version.as_deref().unwrap_or("unavailable"),
+            config.guacd_port,
+        ),
     )
 }
 
@@ -1097,7 +1131,9 @@ fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
         "ignore-cert" => "true".to_string(),
         "security" => rdp_security_value(config.security_mode).to_string(),
         "color-depth" => "32".to_string(),
-        "resize-method" => "display-update".to_string(),
+        // Avoid dynamic display update during connection setup; some RDP stacks
+        // close shortly after ready when display-update is negotiated early.
+        "resize-method" => "".to_string(),
         "enable-wallpaper" => "false".to_string(),
         "enable-theming" => "false".to_string(),
         "disable-bitmap-caching" => "true".to_string(),
@@ -1119,35 +1155,6 @@ fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(
         ));
     }
 
-    stream
-        .write_all(
-            encode_instruction(
-                "size",
-                &[
-                    config.width.to_string(),
-                    config.height.to_string(),
-                    "96".to_string(),
-                ],
-            )
-            .as_bytes(),
-        )
-        .map_err(|error| format!("Could not send RDP display size: {error}"))?;
-    stream
-        .write_all(encode_instruction("audio", &[]).as_bytes())
-        .map_err(|error| format!("Could not send RDP audio capabilities: {error}"))?;
-    stream
-        .write_all(encode_instruction("video", &[]).as_bytes())
-        .map_err(|error| format!("Could not send RDP video capabilities: {error}"))?;
-    stream
-        .write_all(
-            encode_instruction(
-                "image",
-                &["image/png".to_string(), "image/jpeg".to_string()],
-            )
-            .as_bytes(),
-        )
-        .map_err(|error| format!("Could not send RDP image capabilities: {error}"))?;
-
     let values = args
         .iter()
         .map(|arg| guacd_rdp_parameter_value(arg, config))
@@ -1156,6 +1163,37 @@ fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(
     stream
         .write_all(encode_instruction("connect", &values).as_bytes())
         .map_err(|error| format!("Could not connect guacd RDP session: {error}"))?;
+
+    stream
+        .set_read_timeout(Some(RDP_GUACD_CONNECT_TIMEOUT))
+        .map_err(|error| format!("Could not configure RDP connect timeout: {error}"))?;
+    let first_response = read_raw_instruction(stream).map_err(|error| {
+        format!(
+            "Timed out waiting for the RDP server handshake through localhost:{}: {error}",
+            config.local_port
+        )
+    })?;
+    stream
+        .set_read_timeout(None)
+        .map_err(|error| format!("Could not clear RDP connect timeout: {error}"))?;
+
+    let (first_opcode, _) = parse_instruction(&first_response)
+        .map_err(|error| format!("Could not parse initial guacd response: {error}"))?;
+
+    if first_opcode == "error" || first_response.contains(".error") {
+        return Err(format!(
+            "guacd rejected the RDP connection: {first_response}"
+        ));
+    }
+
+    config.diagnostics.info(
+        DiagnosticArea::Launcher,
+        format!(
+            "Embedded RDP received initial guacd response for sessionId={}, instanceId={}, opcode={}",
+            config.session_id, config.instance_id, first_opcode
+        ),
+    );
+
     Ok(())
 }
 
@@ -1171,7 +1209,38 @@ fn query_value(query: &str, key: &str) -> Option<String> {
 }
 
 fn should_forward_client_instruction(instruction: &str) -> bool {
-    !instruction.starts_with("0.,") && !instruction.is_empty()
+    !is_tunnel_internal_instruction(instruction) && !instruction.is_empty()
+}
+
+fn log_safe_guacamole_opcode(config: &RdpBridgeConfig, direction: &str, instruction: &str) {
+    let Ok((opcode, _)) = parse_instruction(instruction) else {
+        return;
+    };
+    if !is_diagnostic_opcode(&opcode) {
+        return;
+    }
+    config.diagnostics.info(
+        DiagnosticArea::Launcher,
+        format!(
+            "Embedded RDP protocol {direction}: sessionId={}, instanceId={}, opcode={opcode}",
+            config.session_id, config.instance_id,
+        ),
+    );
+}
+
+fn is_diagnostic_opcode(opcode: &str) -> bool {
+    matches!(
+        opcode,
+        "" | "ready" | "sync" | "disconnect" | "error" | "ack" | "size"
+    )
+}
+
+fn should_echo_tunnel_instruction(instruction: &str) -> bool {
+    is_tunnel_internal_instruction(instruction) && instruction.contains("4.ping")
+}
+
+fn is_tunnel_internal_instruction(instruction: &str) -> bool {
+    instruction.starts_with("0.,")
 }
 
 fn drain_complete_instructions(buffer: &mut Vec<u8>) -> Vec<String> {
@@ -1225,6 +1294,11 @@ fn encode_instruction(opcode: &str, args: &[String]) -> String {
 }
 
 fn read_instruction(stream: &mut TcpStream) -> Result<(String, Vec<String>), String> {
+    let data = read_raw_instruction(stream)?;
+    parse_instruction(&data)
+}
+
+fn read_raw_instruction(stream: &mut TcpStream) -> Result<String, String> {
     let mut data = Vec::new();
     let mut byte = [0_u8; 1];
     loop {
@@ -1236,7 +1310,7 @@ fn read_instruction(stream: &mut TcpStream) -> Result<(String, Vec<String>), Str
             break;
         }
     }
-    parse_instruction(&String::from_utf8_lossy(&data))
+    Ok(String::from_utf8_lossy(&data).to_string())
 }
 
 fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
@@ -1378,6 +1452,25 @@ mod tests {
         buffer.extend_from_slice(&encoded.as_bytes()[encoded.len() - 2..]);
         assert_eq!(drain_complete_instructions(&mut buffer), vec![encoded]);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn echoes_websocket_tunnel_ping_but_does_not_forward_it() {
+        let ping = encode_instruction("", &["ping".to_string(), "123".to_string()]);
+
+        assert!(super::should_echo_tunnel_instruction(&ping));
+        assert!(!super::should_forward_client_instruction(&ping));
+    }
+
+    #[test]
+    fn forwards_guacamole_client_instructions() {
+        let mouse = encode_instruction(
+            "mouse",
+            &["10".to_string(), "20".to_string(), "1".to_string()],
+        );
+
+        assert!(!super::should_echo_tunnel_instruction(&mouse));
+        assert!(super::should_forward_client_instruction(&mouse));
     }
 
     #[test]
@@ -1542,6 +1635,7 @@ mod tests {
                 None,
                 None,
                 Some("guacd 1.6.0".to_string()),
+                4822,
                 Diagnostics::default(),
             )
             .unwrap();
@@ -1588,6 +1682,7 @@ mod tests {
             width: 1280,
             height: 720,
             guacd_version: Some("guacd 1.6.0".to_string()),
+            guacd_port: 4822,
             expires_at: Instant::now() + Duration::from_secs(60),
             diagnostics: Diagnostics::default(),
         }

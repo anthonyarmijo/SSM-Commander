@@ -1,8 +1,10 @@
-use crate::guacd;
 use crate::models::{DependencyCheck, DependencyStatus, EnvironmentState, EnvironmentStatus};
+use crate::{aws_cli, guacd};
+use std::path::PathBuf;
 use std::process::Command;
+use tauri::AppHandle;
 
-pub fn check_environment() -> EnvironmentState {
+pub fn check_environment(app: &AppHandle) -> EnvironmentState {
     let openssh_install_url = if cfg!(target_os = "windows") {
         "https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-overview"
     } else {
@@ -49,8 +51,11 @@ pub fn check_environment() -> EnvironmentState {
             install_url: None,
             install_label: None,
         },
-        check_guacd_bridge(),
-        check_tool(
+        check_guacd_bridge(app),
+    ];
+
+    if cfg!(debug_assertions) {
+        checks.push(check_tool(
             "Rust toolchain",
             "cargo",
             &["--version"],
@@ -58,8 +63,8 @@ pub fn check_environment() -> EnvironmentState {
             "Install Rust with rustup when building or packaging the app locally.",
             Some("https://www.rust-lang.org/tools/install"),
             Some("Rust install guide"),
-        ),
-    ];
+        ));
+    }
 
     if cfg!(target_os = "windows") {
         checks.push(check_tool(
@@ -108,7 +113,21 @@ pub fn check_environment() -> EnvironmentState {
     }
 }
 
-fn check_guacd_bridge() -> DependencyCheck {
+fn check_guacd_bridge(app: &AppHandle) -> DependencyCheck {
+    if let Some(version) = guacd::bundled_guacd_version(app) {
+        return DependencyCheck {
+            name: "Guacamole RDP bridge".to_string(),
+            command: "guacd".to_string(),
+            status: DependencyStatus::Present,
+            version: Some(version),
+            required: false,
+            message: "Bundled sidecar available; starts on demand".to_string(),
+            remediation: None,
+            install_url: None,
+            install_label: None,
+        };
+    }
+
     if guacd::bridge_is_reachable() {
         return DependencyCheck {
             name: "Guacamole RDP bridge".to_string(),
@@ -162,7 +181,14 @@ fn check_tool(
     install_url: Option<&str>,
     install_label: Option<&str>,
 ) -> DependencyCheck {
-    match Command::new(command).args(args).output() {
+    let executable = resolve_tool_executable(command);
+    let mut command_builder = Command::new(&executable);
+    command_builder.args(args);
+    if let Some(path) = aws_cli::tool_path() {
+        command_builder.env("PATH", path);
+    }
+
+    match command_builder.output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -209,4 +235,29 @@ fn check_tool(
             install_label: install_label.map(str::to_string),
         },
     }
+}
+
+fn resolve_tool_executable(command: &str) -> String {
+    if command == "aws" {
+        return aws_cli::aws_executable();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for directory in [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ] {
+            let candidate = PathBuf::from(directory).join(command);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    command.to_string()
 }

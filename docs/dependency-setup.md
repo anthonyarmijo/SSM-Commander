@@ -83,7 +83,13 @@ otool -L src-tauri/binaries/guacd-aarch64-apple-darwin
 The staging script builds Apache Guacamole Server, copies the RDP-capable
 `guacd` binary to `src-tauri/binaries/`, stages required dylibs under
 `src-tauri/resources/macos/lib/`, and fails if relocatable library paths still
-point at Homebrew. Generated sidecar files are ignored by git.
+point at Homebrew. Generated sidecar files are ignored by git. Later runs reuse
+valid staged artifacts; set `GUACD_FORCE_REBUILD=1` when you intentionally need
+to rebuild `guacd` from source.
+
+Packaged builds start the bundled sidecar on a private loopback port for the
+current app process. That avoids reusing stale development or previously mounted
+DMG `guacd` listeners on the default port.
 
 The macOS DMG release build is:
 
@@ -133,6 +139,9 @@ aws sts get-caller-identity --profile your-profile
 ```
 
 The app can validate profiles and report clear errors, but it does not replace IAM, SSO, or Session Manager account configuration.
+Packaged macOS builds discover profiles by reading `~/.aws/config` and
+`~/.aws/credentials` directly, then use standard Homebrew and system tool
+locations for remaining CLI-backed workflows.
 
 ## Local Credential Vault
 

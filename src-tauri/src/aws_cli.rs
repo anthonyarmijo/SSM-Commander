@@ -6,7 +6,7 @@ use crate::models::{
     TagPair,
 };
 use serde::Deserialize;
-use std::{collections::HashMap, process::Command};
+use std::{collections::BTreeMap, collections::HashMap, fs, path::PathBuf, process::Command};
 
 #[derive(Debug)]
 pub struct AwsCliOutput {
@@ -21,8 +21,20 @@ pub struct SsoLoginResult {
 
 const SSO_LOGIN_SUCCESS_PREFIX: &str = concat!("Successfully logged into ", "Start URL:");
 
+const AWS_CLI_PATH_ENV: &str = "SSM_COMMANDER_AWS_CLI_PATH";
+
+#[cfg(target_os = "macos")]
+const MACOS_TOOL_PATHS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
+
 fn run_aws(args: &[String]) -> Result<AwsCliOutput, String> {
-    let output = Command::new("aws")
+    let output = aws_command()
         .args(args)
         .output()
         .map_err(|error| format!("Could not run AWS CLI: {error}"))?;
@@ -39,6 +51,61 @@ fn run_aws(args: &[String]) -> Result<AwsCliOutput, String> {
             redact_message(&stderr)
         })
     }
+}
+
+fn aws_command() -> Command {
+    let mut command = Command::new(aws_executable());
+    if let Some(path) = tool_path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
+pub fn aws_executable() -> String {
+    if let Some(path) = std::env::var_os(AWS_CLI_PATH_ENV)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        return path.to_string_lossy().to_string();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for directory in MACOS_TOOL_PATHS {
+            let candidate = PathBuf::from(directory).join("aws");
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    "aws".to_string()
+}
+
+pub fn tool_path() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let existing = existing.to_string_lossy();
+        return Some(merge_path_entries(&existing, MACOS_TOOL_PATHS));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn merge_path_entries(existing: &str, additions: &[&str]) -> String {
+    let mut entries = Vec::new();
+    for entry in existing.split(':').chain(additions.iter().copied()) {
+        let trimmed = entry.trim();
+        if !trimmed.is_empty() && !entries.iter().any(|candidate| candidate == trimmed) {
+            entries.push(trimmed.to_string());
+        }
+    }
+    entries.join(":")
 }
 
 pub fn build_aws_args(
@@ -64,55 +131,139 @@ pub fn build_aws_args(
 }
 
 pub fn list_profiles() -> Result<Vec<AwsProfile>, String> {
-    let output = Command::new("aws")
-        .args(["configure", "list-profiles"])
-        .output()
-        .map_err(|error| format!("Could not list AWS profiles: {error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "AWS CLI could not list profiles".to_string()
-        } else {
-            redact_message(&stderr)
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let profiles = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|name| AwsProfile {
-            name: name.to_string(),
-            source: ProfileSource::AwsCli,
-            default_region: profile_region(name),
+    Ok(load_profile_map()
+        .into_iter()
+        .map(|(name, default_region)| AwsProfile {
+            name,
+            source: ProfileSource::ConfigFile,
+            default_region,
         })
-        .collect::<Vec<_>>();
-
-    Ok(profiles)
+        .collect())
 }
 
 fn profile_region(profile: &str) -> Option<String> {
-    let output = Command::new("aws")
-        .args(["configure", "get", "region", "--profile", profile])
-        .output()
-        .ok()?;
+    load_profile_map().remove(profile).flatten()
+}
 
-    if !output.status.success() {
-        return None;
+fn load_profile_map() -> BTreeMap<String, Option<String>> {
+    let mut profiles = BTreeMap::new();
+    for (path, format) in aws_profile_files() {
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        merge_profile_map(&mut profiles, parse_profile_file(&contents, format));
+    }
+    profiles
+}
+
+fn aws_profile_files() -> Vec<(PathBuf, AwsProfileFileFormat)> {
+    let mut files = Vec::new();
+    if let Some(path) = std::env::var_os("AWS_CONFIG_FILE") {
+        files.push((PathBuf::from(path), AwsProfileFileFormat::Config));
+    } else if let Some(home) = dirs_next::home_dir() {
+        files.push((
+            home.join(".aws").join("config"),
+            AwsProfileFileFormat::Config,
+        ));
     }
 
-    let region = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if region.is_empty() {
+    if let Some(path) = std::env::var_os("AWS_SHARED_CREDENTIALS_FILE") {
+        files.push((PathBuf::from(path), AwsProfileFileFormat::Credentials));
+    } else if let Some(home) = dirs_next::home_dir() {
+        files.push((
+            home.join(".aws").join("credentials"),
+            AwsProfileFileFormat::Credentials,
+        ));
+    }
+
+    files
+}
+
+#[derive(Clone, Copy)]
+enum AwsProfileFileFormat {
+    Config,
+    Credentials,
+}
+
+fn merge_profile_map(
+    target: &mut BTreeMap<String, Option<String>>,
+    source: BTreeMap<String, Option<String>>,
+) {
+    for (name, region) in source {
+        target
+            .entry(name)
+            .and_modify(|existing| {
+                if existing.is_none() && region.is_some() {
+                    *existing = region.clone();
+                }
+            })
+            .or_insert(region);
+    }
+}
+
+fn parse_profile_file(
+    contents: &str,
+    format: AwsProfileFileFormat,
+) -> BTreeMap<String, Option<String>> {
+    let mut profiles = BTreeMap::new();
+    let mut current_profile: Option<String> = None;
+
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+
+        if let Some(section) = line
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .map(str::trim)
+        {
+            current_profile = normalize_profile_section(section, format);
+            if let Some(profile) = &current_profile {
+                profiles.entry(profile.clone()).or_insert(None);
+            }
+            continue;
+        }
+
+        let Some(profile) = current_profile.as_ref() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "region" {
+            let region = value.trim();
+            if !region.is_empty() {
+                profiles.insert(profile.clone(), Some(region.to_string()));
+            }
+        }
+    }
+
+    profiles
+}
+
+fn normalize_profile_section(section: &str, format: AwsProfileFileFormat) -> Option<String> {
+    let name = match format {
+        AwsProfileFileFormat::Config => {
+            if section == "default" {
+                "default"
+            } else {
+                section.strip_prefix("profile ")?.trim()
+            }
+        }
+        AwsProfileFileFormat::Credentials => section,
+    };
+
+    if name.is_empty() {
         None
     } else {
-        Some(region)
+        Some(name.to_string())
     }
 }
 
 pub fn run_sso_login(profile: &str) -> Result<SsoLoginResult, String> {
-    let output = Command::new("aws")
+    let output = aws_command()
         .args(["sso", "login", "--profile", profile])
         .output()
         .map_err(|error| format!("Could not start AWS SSO login: {error}"))?;
@@ -675,7 +826,10 @@ struct RawInstanceStateName {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_aws_args, classify_capability_error, parse_sso_login_result};
+    use super::{
+        build_aws_args, classify_capability_error, parse_profile_file, parse_sso_login_result,
+        AwsProfileFileFormat,
+    };
     use crate::models::SsoLoginAttemptStatus;
 
     #[test]
@@ -698,6 +852,58 @@ mod tests {
                 "json"
             ]
         );
+    }
+
+    #[test]
+    fn parses_aws_config_profiles_without_cli() {
+        let profiles = parse_profile_file(
+            r#"
+                [default]
+                region = us-east-1
+
+                [profile dev]
+                sso_start_url = https://example.awsapps.com/start
+                region = us-west-2
+
+                [sso-session shared]
+                sso_region = us-east-1
+            "#,
+            AwsProfileFileFormat::Config,
+        );
+
+        assert_eq!(
+            profiles.get("default"),
+            Some(&Some("us-east-1".to_string()))
+        );
+        assert_eq!(profiles.get("dev"), Some(&Some("us-west-2".to_string())));
+        assert!(!profiles.contains_key("shared"));
+    }
+
+    #[test]
+    fn parses_aws_credentials_profiles_without_regions() {
+        let profiles = parse_profile_file(
+            r#"
+                [default]
+                aws_access_key_id = redacted
+
+                [prod]
+                aws_secret_access_key = redacted
+            "#,
+            AwsProfileFileFormat::Credentials,
+        );
+
+        assert_eq!(profiles.get("default"), Some(&None));
+        assert_eq!(profiles.get("prod"), Some(&None));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn merges_macos_tool_path_entries_without_duplicates() {
+        let path = super::merge_path_entries(
+            "/usr/bin:/opt/homebrew/bin",
+            &["/opt/homebrew/bin", "/usr/local/bin"],
+        );
+        assert_eq!(path, "/usr/bin:/opt/homebrew/bin:/usr/local/bin");
     }
 
     #[test]
@@ -737,7 +943,11 @@ mod tests {
             "i-123".to_string(),
             "i-456".to_string(),
         ];
-        args.extend(build_aws_args(Some("sample-profile"), Some("us-west-2"), &[]));
+        args.extend(build_aws_args(
+            Some("sample-profile"),
+            Some("us-west-2"),
+            &[],
+        ));
         assert_eq!(
             args,
             vec![
@@ -764,7 +974,11 @@ mod tests {
             "--instance-ids".to_string(),
             "i-123".to_string(),
         ];
-        args.extend(build_aws_args(Some("sample-profile"), Some("us-west-2"), &[]));
+        args.extend(build_aws_args(
+            Some("sample-profile"),
+            Some("us-west-2"),
+            &[],
+        ));
         assert_eq!(
             args,
             vec![
@@ -795,10 +1009,7 @@ mod tests {
         );
 
         assert!(matches!(result.status, SsoLoginAttemptStatus::Succeeded));
-        assert_eq!(
-            result.message,
-            "AWS SSO login completed successfully."
-        );
+        assert_eq!(result.message, "AWS SSO login completed successfully.");
     }
 
     #[test]

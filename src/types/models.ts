@@ -243,6 +243,13 @@ export interface UserPreferences {
   sidebarWidth?: number | null;
   instanceTableVisibleColumns?: string[] | null;
   instanceTableColumnWidths?: Record<string, number> | null;
+  profileValidationCache?: Record<string, CachedProfileValidation> | null;
+}
+
+export interface CachedProfileValidation {
+  account: string;
+  message: string;
+  validatedAt: string;
 }
 
 export interface ConnectRequest {

@@ -27,6 +27,12 @@ Required:
 - AWS CLI v2
 - AWS Session Manager Plugin
 
+Packaged macOS builds read AWS profiles directly from the standard
+`~/.aws/config` and `~/.aws/credentials` files, so profile discovery does not
+depend on shell startup files or Finder's `PATH`. Existing CLI-backed workflows
+also search standard Homebrew and system tool locations before falling back to
+`PATH`.
+
 Recommended, depending on your workflow:
 
 - OpenSSH
@@ -75,17 +81,19 @@ npm run dev        # frontend-only Vite server
 
 Apple Silicon DMG builds bundle a native Apache Guacamole `guacd` sidecar for
 embedded RDP. The generated sidecar artifacts are intentionally ignored by git;
-stage them before release packaging:
+stage them before release packaging. The staging script reuses valid local
+artifacts on later runs; set `GUACD_FORCE_REBUILD=1` to rebuild the sidecar from
+source.
 
 ```sh
 npm run stage:guacd:macos
 npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
 ```
 
-The packaged app first uses any `guacd` already listening on `127.0.0.1:4822`.
-If none is reachable, it starts the bundled sidecar with
-`guacd -f -b 127.0.0.1 -l 4822` and stops that owned process on app shutdown.
-FreeRDP remains only the external RDP fallback.
+The packaged app starts the bundled sidecar on a private loopback port and stops
+that owned process on app shutdown. Development builds can still use an existing
+bridge on `127.0.0.1:4822` when no bundled sidecar is available. FreeRDP remains
+only the external RDP fallback.
 
 Signing and notarization are configured through environment variables instead
 of committed values. Use `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, and

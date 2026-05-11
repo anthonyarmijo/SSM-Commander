@@ -17,8 +17,11 @@ const CONSOLE_TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const CONSOLE_TUNNEL_SETTLE_DELAY: Duration = Duration::from_millis(1_200);
 
 #[tauri::command]
-pub fn check_environment(state: State<'_, AppState>) -> Result<EnvironmentState, String> {
-    let environment = dependencies::check_environment();
+pub fn check_environment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<EnvironmentState, String> {
+    let environment = dependencies::check_environment(&app);
     match environment.status {
         crate::models::EnvironmentStatus::Ready => {
             state
@@ -788,7 +791,17 @@ fn start_tunnel(
     state.diagnostics.push(
         crate::models::DiagnosticSeverity::Info,
         DiagnosticArea::Process,
-        format!("Starting SSM tunnel on local port {local_port}"),
+        format!(
+            "Starting SSM tunnel on local port {local_port} to {}:{} in {} using profile {}",
+            request
+                .remote_host
+                .as_deref()
+                .filter(|host| !host.trim().is_empty())
+                .unwrap_or("instance"),
+            request.remote_port,
+            request.region,
+            request.profile,
+        ),
         None,
     );
 
@@ -796,5 +809,11 @@ fn start_tunnel(
         .processes
         .lock()
         .map_err(|_| "Process registry is unavailable".to_string())?;
-    registry.start_process("aws", &args, record, &state.diagnostics)
+    registry.start_process(
+        &aws_cli::aws_executable(),
+        &args,
+        aws_cli::tool_path().as_deref(),
+        record,
+        &state.diagnostics,
+    )
 }

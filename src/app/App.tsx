@@ -106,6 +106,7 @@ const EMPTY_STATE_PROFILE_HELP =
   "The app will discover AWS CLI profiles already configured on your machine. Add one to validate access and unlock the Instances and Console views.";
 const SAVED_PROFILE_WORKSPACE_HELP =
   "The active profile powers instance discovery, power actions, and console sessions. Keep additional profiles pinned here so you can switch into them quickly when needed.";
+const PROFILE_VALIDATION_CACHE_TTL_MS = 30 * 60 * 1000;
 type ResolvedTheme = "light" | "dark";
 type ProfileStateMap = Record<string, SavedProfileState>;
 type InstanceContextMenuState = { instanceId: string; x: number; y: number } | null;
@@ -165,6 +166,19 @@ function createSavedProfileState(profileName: string): SavedProfileState {
     identityAccount: null,
     validationMessage: "",
     capabilities: defaultCapabilities(),
+  };
+}
+
+function cachedProfileState(profileName: string, prefs: UserPreferences): SavedProfileState | null {
+  const cached = prefs.profileValidationCache?.[profileName];
+  if (!cached?.account || !cached.validatedAt) return null;
+  const validatedAt = Date.parse(cached.validatedAt);
+  if (!Number.isFinite(validatedAt) || Date.now() - validatedAt > PROFILE_VALIDATION_CACHE_TTL_MS) return null;
+  return {
+    ...createSavedProfileState(profileName),
+    authStatus: "valid",
+    identityAccount: cached.account,
+    validationMessage: cached.message || `Validated ${cached.account}.`,
   };
 }
 
@@ -308,6 +322,15 @@ function RefreshIcon() {
   );
 }
 
+function CopyIcon() {
+  return (
+    <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
+      <rect height="11" rx="2" width="9" x="9" y="8" />
+      <path d="M6 15V7a2 2 0 0 1 2-2h7" />
+    </svg>
+  );
+}
+
 function SortIcon({ direction }: { direction: "asc" | "desc" | "none" }) {
   return (
     <svg aria-hidden="true" className={`sort-icon sort-icon--${direction}`.trim()} fill="none" viewBox="0 0 24 24">
@@ -421,6 +444,19 @@ function buildInstanceActionsSelectionKey(primaryInstanceId: string, selectedIns
   return primaryInstanceId ? `${primaryInstanceId}::${selectedInstanceIds.join("|")}` : "";
 }
 
+function formatDiagnosticsForClipboard(events: DiagnosticEvent[]): string {
+  if (events.length === 0) {
+    return "No logs yet.";
+  }
+  return events
+    .map((event) => {
+      const timestamp = new Date(event.timestamp).toLocaleString();
+      const command = event.command?.length ? `\ncommand: ${event.command.join(" ")}` : "";
+      return `${timestamp} - ${event.area} - ${event.severity}\n${event.message}${command}`;
+    })
+    .join("\n\n");
+}
+
 export function App() {
   const previewConfig = useMemo(() => getBrowserPreviewConfig(), []);
   const [environment, setEnvironment] = useState<EnvironmentState | null>(null);
@@ -454,6 +490,7 @@ export function App() {
   const [rdpPassword, setRdpPassword] = useState("");
   const [rdpSecurityMode, setRdpSecurityMode] = useState<RdpSecurityMode>("auto");
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
+  const [logsCopyStatus, setLogsCopyStatus] = useState("");
   const [query, setQuery] = useState("");
   const [sshUser, setSshUser] = useState("ec2-user");
   const [sshPassword, setSshPassword] = useState("");
@@ -769,6 +806,17 @@ export function App() {
     setDiagnostics(events);
   }
 
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(formatDiagnosticsForClipboard(diagnostics));
+      setLogsCopyStatus("Copied");
+      window.setTimeout(() => setLogsCopyStatus(""), 1800);
+    } catch {
+      setLogsCopyStatus("Copy failed");
+      window.setTimeout(() => setLogsCopyStatus(""), 2400);
+    }
+  }
+
   async function loadSessions() {
     const active = await invokeCommand<SessionRecord[]>("list_active_sessions");
     setSessions(active);
@@ -1000,7 +1048,7 @@ export function App() {
     setSidebarWidth(nextSidebarWidth);
     setInstanceTableVisibleColumns(nextVisibleColumns);
     setInstanceTableColumnWidths(nextColumnWidths);
-    setProfileStates((current) => buildInitialProfileStates(current, normalizedSavedProfiles));
+    setProfileStates((current) => buildInitialProfileStates(current, normalizedSavedProfiles, prefs));
 
     if (initialVisibleColumns.migrated) {
       await savePreferencesPatch({ instanceTableVisibleColumns: nextVisibleColumns });
@@ -1095,9 +1143,21 @@ export function App() {
       setNotice(`Profile valid for account ${caller.account}.`);
       if (!activeProfile) {
         await makeProfileActive(profileName);
-      } else {
-        await savePreferencesPatch(buildConnectionPreferences());
       }
+      await savePreferencesPatch({
+        ...buildConnectionPreferences({
+          activeProfile: activeProfile || profileName,
+          lastProfile: activeProfile || profileName,
+        }),
+        profileValidationCache: {
+          ...(preferencesRef.current.profileValidationCache ?? {}),
+          [profileName]: {
+            account: caller.account,
+            message: `Validated ${caller.account}.`,
+            validatedAt: new Date().toISOString(),
+          },
+        },
+      });
       if (profileName === activeProfile) {
         resetInstanceContext();
       }
@@ -1114,6 +1174,9 @@ export function App() {
         validationMessage: message,
         capabilities: defaultCapabilities(),
       }));
+      const remainingCache = { ...(preferencesRef.current.profileValidationCache ?? {}) };
+      delete remainingCache[profileName];
+      await savePreferencesPatch({ profileValidationCache: remainingCache });
       setNotice(nextStatus === "expired" ? "AWS SSO sign-in is required for this profile." : "Profile validation failed.");
     } finally {
       setIsBusy(false);
@@ -3118,6 +3181,14 @@ export function App() {
                         RDP password
                         <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
                       </label>
+                      <label>
+                        RDP security
+                        <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
+                          {RDP_SECURITY_MODE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
                     </>
                   ) : (
                     null
@@ -3195,7 +3266,21 @@ export function App() {
                 <p className="eyebrow">Logs</p>
                 <h2 id="logs-title">Logs</h2>
               </div>
-              <button onClick={() => void loadDiagnostics()}>Refresh</button>
+              <div className="logs-actions">
+                <span>{logsCopyStatus || `Showing ${Math.min(diagnostics.length, 80)} of ${diagnostics.length}`}</span>
+                <button
+                  aria-label="Copy logs to clipboard"
+                  className="button-secondary icon-button glass-icon-button"
+                  disabled={diagnostics.length === 0}
+                  onClick={() => void copyDiagnostics()}
+                  title="Copy logs to clipboard"
+                  type="button"
+                >
+                  <CopyIcon />
+                  <span className="visually-hidden">Copy logs</span>
+                </button>
+                <button onClick={() => void loadDiagnostics()}>Refresh</button>
+              </div>
             </header>
 
             <section className="panel logs-panel">
@@ -3298,10 +3383,32 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
     }
 
     display.replaceChildren();
+    setError("");
     const tunnel = new Guacamole.WebSocketTunnel(session.bridgeUrl);
     const client = new Guacamole.Client(tunnel);
     const element = client.getDisplay().getElement();
     display.appendChild(element);
+    let lastSize = "";
+    let resizeFrame = 0;
+    const sendDisplaySize = () => {
+      resizeFrame = 0;
+      const width = Math.max(1, Math.floor(display.clientWidth));
+      const height = Math.max(1, Math.floor(display.clientHeight));
+      const nextSize = `${width}x${height}`;
+      if (nextSize === lastSize) {
+        return;
+      }
+      lastSize = nextSize;
+      client.sendSize(width, height);
+    };
+    const scheduleDisplaySize = () => {
+      if (resizeFrame) {
+        return;
+      }
+      resizeFrame = window.requestAnimationFrame(sendDisplaySize);
+    };
+    const resizeObserver = new ResizeObserver(scheduleDisplaySize);
+    resizeObserver.observe(display);
 
     tunnel.onerror = (status: { message?: string }) => {
       setError(status.message || "RDP tunnel disconnected.");
@@ -3310,6 +3417,7 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
       setError(status.message || "RDP console disconnected.");
     };
     client.connect(`token=${encodeURIComponent(session.connectionToken)}`);
+    scheduleDisplaySize();
 
     const mouse = new Guacamole.Mouse(element);
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState: unknown) => {
@@ -3324,6 +3432,10 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
     };
 
     return () => {
+      resizeObserver.disconnect();
+      if (resizeFrame) {
+        window.cancelAnimationFrame(resizeFrame);
+      }
       keyboard.onkeydown = null;
       keyboard.onkeyup = null;
       client.disconnect();
@@ -3351,10 +3463,11 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
 function buildInitialProfileStates(
   current: ProfileStateMap,
   savedProfiles: string[],
+  prefs: UserPreferences,
 ): ProfileStateMap {
   const next: ProfileStateMap = {};
   for (const profileName of savedProfiles) {
-    next[profileName] = current[profileName] ?? createSavedProfileState(profileName);
+    next[profileName] = current[profileName] ?? cachedProfileState(profileName, prefs) ?? createSavedProfileState(profileName);
   }
   return next;
 }

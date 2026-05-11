@@ -2182,6 +2182,17 @@ tr.selected--primary td {
   min-height: 420px;
 }
 
+.logs-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.logs-actions span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .view--console {
   grid-template-rows: auto 1fr;
   gap: 0;

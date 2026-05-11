@@ -133,7 +133,9 @@ fn redact_awsapps_start_urls(input: &str) -> String {
     while let Some(relative_match) = output[search_from..].find(concat!("awsapps.com", "/start")) {
         let match_start = search_from + relative_match;
         let start = output[..match_start]
-            .rfind(|ch: char| ch.is_whitespace() || ch == '"' || ch == '\'' || ch == '<' || ch == '(')
+            .rfind(|ch: char| {
+                ch.is_whitespace() || ch == '"' || ch == '\'' || ch == '<' || ch == '('
+            })
             .map(|index| index + 1)
             .unwrap_or(0);
         let end = find_delimited_value_end(&output, match_start);
@@ -204,7 +206,10 @@ fn find_delimited_value_end(input: &str, start: usize) -> usize {
     input[start..]
         .find(|ch: char| {
             ch.is_whitespace()
-                || matches!(ch, ',' | ';' | '"' | '\'' | '<' | '>' | ')' | '(' | '[' | ']')
+                || matches!(
+                    ch,
+                    ',' | ';' | '"' | '\'' | '<' | '>' | ')' | '(' | '[' | ']'
+                )
         })
         .map(|offset| start + offset)
         .unwrap_or(input.len())
