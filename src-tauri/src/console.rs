@@ -26,6 +26,26 @@ const DEFAULT_RDP_TARGET_HOST: &str = "127.0.0.1";
 const RDP_TARGET_HOST_ENV: &str = "SSM_COMMANDER_GUACD_RDP_HOST";
 const RDP_BRIDGE_TOKEN_TTL: Duration = Duration::from_secs(120);
 const RDP_GUACD_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const RDP_DISPLAY_SUMMARY_INTERVAL: Duration = Duration::from_secs(5);
+const RDP_DISPLAY_SUMMARY_DURATION: Duration = Duration::from_secs(30);
+const GUACD_TO_BROWSER_DISPLAY_OPCODES: &[&str] = &[
+    "ready",
+    "size",
+    "png",
+    "jpeg",
+    "blob",
+    "img",
+    "copy",
+    "rect",
+    "cfill",
+    "sync",
+    "mouse",
+    "cursor",
+    "error",
+    "disconnect",
+];
+const BROWSER_TO_GUACD_DISPLAY_OPCODES: &[&str] =
+    &["ack", "sync", "size", "mouse", "key", "error", "disconnect"];
 
 #[derive(Default)]
 pub struct ConsoleRegistry {
@@ -177,6 +197,96 @@ enum RdpSecurityMode {
     NlaExt,
     Tls,
     Rdp,
+}
+
+struct GuacamoleDisplayDiagnostics {
+    started_at: Instant,
+    last_summary_at: Instant,
+    guacd_to_browser: GuacamoleDirectionStats,
+    browser_to_guacd: GuacamoleDirectionStats,
+}
+
+#[derive(Default)]
+struct GuacamoleDirectionStats {
+    instructions: u64,
+    bytes: u64,
+    opcodes: HashMap<String, u64>,
+}
+
+impl GuacamoleDisplayDiagnostics {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started_at: now,
+            last_summary_at: now,
+            guacd_to_browser: GuacamoleDirectionStats::default(),
+            browser_to_guacd: GuacamoleDirectionStats::default(),
+        }
+    }
+
+    fn record_guacd_to_browser(&mut self, instruction: &str) -> Option<String> {
+        self.guacd_to_browser.record(instruction)
+    }
+
+    fn record_browser_to_guacd(&mut self, instruction: &str) -> Option<String> {
+        self.browser_to_guacd.record(instruction)
+    }
+
+    fn log_summary(&mut self, config: &RdpBridgeConfig, force: bool) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.started_at);
+        if !force {
+            if elapsed > RDP_DISPLAY_SUMMARY_DURATION {
+                return;
+            }
+            if now.duration_since(self.last_summary_at) < RDP_DISPLAY_SUMMARY_INTERVAL {
+                return;
+            }
+        }
+
+        self.last_summary_at = now;
+        config.diagnostics.info(
+            DiagnosticArea::Launcher,
+            self.summary_message(&config.session_id, &config.instance_id, elapsed),
+        );
+    }
+
+    fn summary_message(&self, session_id: &str, instance_id: &str, elapsed: Duration) -> String {
+        format!(
+            "Embedded RDP display summary: sessionId={session_id}, instanceId={instance_id}, elapsedMs={}, {}; {}",
+            elapsed.as_millis(),
+            self.guacd_to_browser
+                .summary("guacd->browser", GUACD_TO_BROWSER_DISPLAY_OPCODES),
+            self.browser_to_guacd
+                .summary("browser->guacd", BROWSER_TO_GUACD_DISPLAY_OPCODES),
+        )
+    }
+}
+
+impl GuacamoleDirectionStats {
+    fn record(&mut self, instruction: &str) -> Option<String> {
+        let opcode = parse_instruction_opcode(instruction).ok()?;
+        self.instructions += 1;
+        self.bytes += instruction.len() as u64;
+        *self.opcodes.entry(opcode.clone()).or_insert(0) += 1;
+        Some(opcode)
+    }
+
+    fn summary(&self, label: &str, displayed_opcodes: &[&str]) -> String {
+        let counts = displayed_opcodes
+            .iter()
+            .map(|opcode| format!("{opcode}={}", self.count(opcode)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "{label} total={} bytes={} {counts}",
+            self.instructions, self.bytes
+        )
+    }
+
+    fn count(&self, opcode: &str) -> u64 {
+        self.opcodes.get(opcode).copied().unwrap_or(0)
+    }
 }
 
 impl GuacamoleBridge {
@@ -800,8 +910,8 @@ fn handle_guacamole_websocket(
 
     let mut guacd = TcpStream::connect((guacd::GUACD_HOST, config.guacd_port))
         .map_err(|error| format!("Could not connect to guacd: {error}"))?;
-    match start_guacd_rdp(&mut guacd, &config) {
-        Ok(()) => {}
+    let initial_guacd_response = match start_guacd_rdp(&mut guacd, &config) {
+        Ok(response) => response,
         Err(error) => {
             config.diagnostics.warning(
                 DiagnosticArea::Launcher,
@@ -819,6 +929,12 @@ fn handle_guacamole_websocket(
     websocket
         .send(Message::Text(uuid_instruction.into()))
         .map_err(|error| format!("Could not initialize Guacamole tunnel: {error}"))?;
+    let mut display_diagnostics = GuacamoleDisplayDiagnostics::new();
+    display_diagnostics.record_guacd_to_browser(&initial_guacd_response);
+    log_safe_guacamole_opcode(&config, "guacd-to-browser", &initial_guacd_response);
+    websocket
+        .send(Message::Text(initial_guacd_response.into()))
+        .map_err(|error| format!("Could not forward initial guacd response: {error}"))?;
 
     guacd
         .set_nonblocking(true)
@@ -847,20 +963,19 @@ fn handle_guacamole_websocket(
                 guacd_instruction_buffer.extend_from_slice(&buffer[..read]);
                 let mut websocket_send_failed = false;
                 for payload in drain_complete_instructions(&mut guacd_instruction_buffer) {
+                    let opcode = display_diagnostics.record_guacd_to_browser(&payload);
                     log_safe_guacamole_opcode(&config, "guacd-to-browser", &payload);
-                    if payload.contains(".error")
-                        || payload.to_lowercase().contains("wrong security")
-                    {
+                    if opcode.as_deref() == Some("error") {
+                        log_guacd_error_instruction(&config, &payload);
+                    }
+                    if let Err(error) = websocket.send(Message::Text(payload.into())) {
                         config.diagnostics.warning(
                             DiagnosticArea::Launcher,
                             format!(
-                                "Embedded RDP guacd reported: {}: {}",
-                                rdp_bridge_diagnostic_message(&config),
-                                payload
+                                "Embedded RDP could not forward guacd instruction to browser for sessionId={}, instanceId={}: {}",
+                                config.session_id, config.instance_id, error
                             ),
                         );
-                    }
-                    if websocket.send(Message::Text(payload.into())).is_err() {
                         websocket_send_failed = true;
                         break;
                     }
@@ -896,13 +1011,31 @@ fn handle_guacamole_websocket(
             Ok(Message::Text(text)) => {
                 let text: &str = text.as_ref();
                 websocket_instruction_buffer.extend_from_slice(text.as_bytes());
+                let mut guacd_send_failed = false;
                 for instruction in drain_complete_instructions(&mut websocket_instruction_buffer) {
+                    display_diagnostics.record_browser_to_guacd(&instruction);
                     log_safe_guacamole_opcode(&config, "browser-to-guacd", &instruction);
                     if should_echo_tunnel_instruction(&instruction) {
                         let _ = websocket.send(Message::Text(instruction.into()));
                     } else if should_forward_client_instruction(&instruction) {
-                        let _ = guacd.write_all(instruction.as_bytes());
+                        if let Err(error) = guacd.write_all(instruction.as_bytes()) {
+                            let opcode = parse_instruction(&instruction)
+                                .map(|(opcode, _)| opcode)
+                                .unwrap_or_else(|_| "unparseable".to_string());
+                            config.diagnostics.warning(
+                                DiagnosticArea::Launcher,
+                                format!(
+                                    "Embedded RDP could not forward browser instruction to guacd for sessionId={}, instanceId={}, opcode={}: {}",
+                                    config.session_id, config.instance_id, opcode, error
+                                ),
+                            );
+                            guacd_send_failed = true;
+                            break;
+                        }
                     }
+                }
+                if guacd_send_failed {
+                    break;
                 }
             }
             Ok(Message::Close(frame)) => {
@@ -930,9 +1063,11 @@ fn handle_guacamole_websocket(
             }
         }
 
+        display_diagnostics.log_summary(&config, false);
         thread::sleep(Duration::from_millis(8));
     }
 
+    display_diagnostics.log_summary(&config, true);
     let _ = guacd.write_all(encode_instruction("disconnect", &[]).as_bytes());
     Ok(())
 }
@@ -1119,7 +1254,11 @@ fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig) -> String {
 
 fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
     match arg {
-        version if version.starts_with("VERSION_") => version.to_string(),
+        // guacd 1.6 advertises its protocol version as the first "args"
+        // value, but echoing that value back causes the embedded handshake to
+        // close before "connect" is accepted. Preserve the slot with the
+        // legacy empty version response.
+        version if version.starts_with("VERSION_") => String::new(),
         "hostname" => config.hostname.clone(),
         "port" => config.local_port.to_string(),
         "width" => config.width.to_string(),
@@ -1131,20 +1270,49 @@ fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
         "ignore-cert" => "true".to_string(),
         "security" => rdp_security_value(config.security_mode).to_string(),
         "color-depth" => "32".to_string(),
-        // Avoid dynamic display update during connection setup; some RDP stacks
-        // close shortly after ready when display-update is negotiated early.
-        "resize-method" => "".to_string(),
-        "enable-wallpaper" => "false".to_string(),
-        "enable-theming" => "false".to_string(),
+        "force-lossless" => "true".to_string(),
+        // Prefer the admin/console RDP session for server instances. This
+        // avoids attaching to a stale disconnected desktop session that can
+        // present as an interactive black screen.
+        "console" => "true".to_string(),
+        // The bundled guacd 1.6/macOS build can crash while assigning an audio
+        // encoder during real RDP setup. Keep embedded RDP display-only until
+        // audio is explicitly supported and tested.
+        "disable-audio" => "true".to_string(),
+        "console-audio" => "false".to_string(),
+        // Clipboard is not needed for initial display and adds another dynamic
+        // FreeRDP channel while debugging the black-screen path.
+        "disable-copy" => "true".to_string(),
+        "disable-paste" => "true".to_string(),
+        // The tunnel and renderer are stable now, and the black-screen traces
+        // show real draw opcodes followed by a black default layer. Allow
+        // modern RDP display updates and richer desktop drawing for the next
+        // compatibility pass.
+        "resize-method" => "display-update".to_string(),
+        "enable-wallpaper" => "true".to_string(),
+        "enable-theming" => "true".to_string(),
+        "enable-font-smoothing" => "true".to_string(),
+        "enable-full-window-drag" => "true".to_string(),
+        "enable-desktop-composition" => "true".to_string(),
+        "enable-menu-animations" => "false".to_string(),
         "disable-bitmap-caching" => "true".to_string(),
         "disable-offscreen-caching" => "true".to_string(),
         "disable-glyph-caching" => "true".to_string(),
-        "disable-gfx" => "true".to_string(),
+        // Let FreeRDP/guacd use the RDP Graphics Pipeline when the server
+        // supports it. The old graphics path is now known to settle on a black
+        // framebuffer in the user's environment.
+        "disable-gfx" => "false".to_string(),
         _ => String::new(),
     }
 }
 
-fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(), String> {
+fn build_guacd_rdp_connect_values(args: &[String], config: &RdpBridgeConfig) -> Vec<String> {
+    args.iter()
+        .map(|arg| guacd_rdp_parameter_value(arg, config))
+        .collect()
+}
+
+fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<String, String> {
     stream
         .write_all(encode_instruction("select", &["rdp".to_string()]).as_bytes())
         .map_err(|error| format!("Could not select RDP protocol: {error}"))?;
@@ -1155,10 +1323,7 @@ fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(
         ));
     }
 
-    let values = args
-        .iter()
-        .map(|arg| guacd_rdp_parameter_value(arg, config))
-        .collect::<Vec<_>>();
+    let values = build_guacd_rdp_connect_values(&args, config);
 
     stream
         .write_all(encode_instruction("connect", &values).as_bytes())
@@ -1194,7 +1359,7 @@ fn start_guacd_rdp(stream: &mut TcpStream, config: &RdpBridgeConfig) -> Result<(
         ),
     );
 
-    Ok(())
+    Ok(first_response)
 }
 
 fn query_value(query: &str, key: &str) -> Option<String> {
@@ -1213,7 +1378,7 @@ fn should_forward_client_instruction(instruction: &str) -> bool {
 }
 
 fn log_safe_guacamole_opcode(config: &RdpBridgeConfig, direction: &str, instruction: &str) {
-    let Ok((opcode, _)) = parse_instruction(instruction) else {
+    let Ok(opcode) = parse_instruction_opcode(instruction) else {
         return;
     };
     if !is_diagnostic_opcode(&opcode) {
@@ -1228,11 +1393,43 @@ fn log_safe_guacamole_opcode(config: &RdpBridgeConfig, direction: &str, instruct
     );
 }
 
+fn log_guacd_error_instruction(config: &RdpBridgeConfig, instruction: &str) {
+    let detail = parse_instruction(instruction)
+        .map(|(_, args)| summarize_guacamole_args(&args))
+        .unwrap_or_else(|error| format!("unparseable error instruction: {error}"));
+    config.diagnostics.warning(
+        DiagnosticArea::Launcher,
+        format!(
+            "Embedded RDP guacd reported error for sessionId={}, instanceId={}: {}",
+            config.session_id, config.instance_id, detail
+        ),
+    );
+}
+
+fn summarize_guacamole_args(args: &[String]) -> String {
+    if args.is_empty() {
+        return "no detail".to_string();
+    }
+
+    args.iter()
+        .take(4)
+        .map(|arg| truncate_diagnostic_value(arg, 200))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn truncate_diagnostic_value(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let clipped = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{clipped}...")
+    } else {
+        clipped
+    }
+}
+
 fn is_diagnostic_opcode(opcode: &str) -> bool {
-    matches!(
-        opcode,
-        "" | "ready" | "sync" | "disconnect" | "error" | "ack" | "size"
-    )
+    matches!(opcode, "ready" | "disconnect" | "error")
 }
 
 fn should_echo_tunnel_instruction(instruction: &str) -> bool {
@@ -1313,6 +1510,21 @@ fn read_raw_instruction(stream: &mut TcpStream) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&data).to_string())
 }
 
+fn parse_instruction_opcode(input: &str) -> Result<String, String> {
+    let dot = input
+        .find('.')
+        .ok_or_else(|| "Malformed Guacamole instruction length".to_string())?;
+    let length = input[..dot]
+        .parse::<usize>()
+        .map_err(|error| format!("Malformed Guacamole element length: {error}"))?;
+    let value_start = dot + 1;
+    let value_end = value_start + length;
+    if value_end > input.len() {
+        return Err("Guacamole instruction opcode is truncated".to_string());
+    }
+    Ok(input[value_start..value_end].to_string())
+}
+
 fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
     let mut elements = Vec::new();
     let mut index = 0;
@@ -1348,11 +1560,12 @@ fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_ssh_password_prompt, drain_complete_instructions, encode_instruction,
-        guacd_rdp_parameter_value, normalize_rdp_credentials, normalize_rdp_security_mode,
-        normalize_rdp_target_host, parse_instruction, rdp_bridge_diagnostic_message,
-        rdp_security_value, ssh_command_args, validate_guacamole_request, write_temp_ssh_key,
-        GuacamoleBridge, RdpBridgeConfig, RdpCredentials, RdpSecurityMode,
+        build_guacd_rdp_connect_values, contains_ssh_password_prompt, drain_complete_instructions,
+        encode_instruction, guacd_rdp_parameter_value, normalize_rdp_credentials,
+        normalize_rdp_security_mode, normalize_rdp_target_host, parse_instruction,
+        parse_instruction_opcode, rdp_bridge_diagnostic_message, rdp_security_value,
+        ssh_command_args, validate_guacamole_request, write_temp_ssh_key, GuacamoleBridge,
+        GuacamoleDisplayDiagnostics, RdpBridgeConfig, RdpCredentials, RdpSecurityMode,
     };
     use crate::diagnostics::Diagnostics;
     use std::time::{Duration, Instant};
@@ -1517,14 +1730,42 @@ mod tests {
             RdpSecurityMode::Auto,
         );
 
-        assert_eq!(
-            guacd_rdp_parameter_value("VERSION_1_5_0", &config),
-            "VERSION_1_5_0"
-        );
+        assert_eq!(guacd_rdp_parameter_value("VERSION_1_5_0", &config), "");
         assert_eq!(guacd_rdp_parameter_value("width", &config), "1280");
         assert_eq!(guacd_rdp_parameter_value("height", &config), "720");
         assert_eq!(guacd_rdp_parameter_value("dpi", &config), "96");
         assert_eq!(guacd_rdp_parameter_value("color-depth", &config), "32");
+        assert_eq!(guacd_rdp_parameter_value("force-lossless", &config), "true");
+        assert_eq!(guacd_rdp_parameter_value("console", &config), "true");
+        assert_eq!(guacd_rdp_parameter_value("disable-audio", &config), "true");
+        assert_eq!(guacd_rdp_parameter_value("console-audio", &config), "false");
+        assert_eq!(guacd_rdp_parameter_value("disable-copy", &config), "true");
+        assert_eq!(guacd_rdp_parameter_value("disable-paste", &config), "true");
+        assert_eq!(
+            guacd_rdp_parameter_value("resize-method", &config),
+            "display-update"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-wallpaper", &config),
+            "true"
+        );
+        assert_eq!(guacd_rdp_parameter_value("enable-theming", &config), "true");
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-font-smoothing", &config),
+            "true"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-full-window-drag", &config),
+            "true"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-desktop-composition", &config),
+            "true"
+        );
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-menu-animations", &config),
+            "false"
+        );
         assert_eq!(
             guacd_rdp_parameter_value("disable-bitmap-caching", &config),
             "true"
@@ -1537,7 +1778,125 @@ mod tests {
             guacd_rdp_parameter_value("disable-glyph-caching", &config),
             "true"
         );
-        assert_eq!(guacd_rdp_parameter_value("disable-gfx", &config), "true");
+        assert_eq!(guacd_rdp_parameter_value("disable-gfx", &config), "false");
+    }
+
+    #[test]
+    fn builds_guacd_connect_values_for_versioned_rdp_args() {
+        let config = rdp_config(
+            Some("pkiadmin"),
+            Some("cosmos"),
+            Some("secret"),
+            RdpSecurityMode::Auto,
+        );
+        let args = [
+            "VERSION_1_5_0",
+            "hostname",
+            "port",
+            "timeout",
+            "domain",
+            "username",
+            "password",
+            "width",
+            "height",
+            "dpi",
+            "initial-program",
+            "color-depth",
+            "force-lossless",
+            "console",
+            "disable-audio",
+            "console-audio",
+            "disable-copy",
+            "disable-paste",
+            "security",
+            "ignore-cert",
+            "resize-method",
+            "enable-wallpaper",
+            "enable-theming",
+            "enable-font-smoothing",
+            "enable-full-window-drag",
+            "enable-desktop-composition",
+            "enable-menu-animations",
+            "disable-bitmap-caching",
+            "disable-offscreen-caching",
+            "disable-glyph-caching",
+            "disable-gfx",
+        ]
+        .map(str::to_string);
+
+        let values = build_guacd_rdp_connect_values(&args, &config);
+
+        assert_eq!(values.len(), args.len());
+        assert_eq!(values[0], "");
+        assert_eq!(values[1], "127.0.0.1");
+        assert_eq!(values[2], "3390");
+        assert_eq!(values[3], "");
+        assert_eq!(values[4], "cosmos");
+        assert_eq!(values[5], "pkiadmin");
+        assert_eq!(values[6], "secret");
+        assert_eq!(values[11], "32");
+        assert_eq!(values[12], "true");
+        assert_eq!(values[13], "true");
+        assert_eq!(values[14], "true");
+        assert_eq!(values[15], "false");
+        assert_eq!(values[16], "true");
+        assert_eq!(values[17], "true");
+        assert_eq!(values[18], "any");
+        assert_eq!(values[19], "true");
+        assert_eq!(values[20], "display-update");
+        assert_eq!(values[21], "true");
+        assert_eq!(values[22], "true");
+        assert_eq!(values[23], "true");
+        assert_eq!(values[24], "true");
+        assert_eq!(values[25], "true");
+        assert_eq!(values[26], "false");
+        assert_eq!(values[27], "true");
+        assert_eq!(values[28], "true");
+        assert_eq!(values[29], "true");
+        assert_eq!(values[30], "false");
+    }
+
+    #[test]
+    fn parses_guacamole_opcode_without_payload() {
+        let instruction = encode_instruction(
+            "png",
+            &[
+                "image/png".to_string(),
+                "1".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "large-payload".to_string(),
+            ],
+        );
+
+        assert_eq!(parse_instruction_opcode(&instruction).unwrap(), "png");
+    }
+
+    #[test]
+    fn summarizes_display_opcodes_without_image_payloads() {
+        let mut diagnostics = GuacamoleDisplayDiagnostics::new();
+        let image_instruction = encode_instruction(
+            "png",
+            &[
+                "image/png".to_string(),
+                "1".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "secret-image-payload".to_string(),
+            ],
+        );
+        let ack_instruction = encode_instruction("ack", &["1".to_string(), "0".to_string()]);
+
+        diagnostics.record_guacd_to_browser(&image_instruction);
+        diagnostics.record_browser_to_guacd(&ack_instruction);
+
+        let summary =
+            diagnostics.summary_message("session-1", "instance-1", Duration::from_secs(2));
+
+        assert!(summary.contains("png=1"));
+        assert!(summary.contains("ack=1"));
+        assert!(summary.contains("bytes="));
+        assert!(!summary.contains("secret-image-payload"));
     }
 
     #[test]

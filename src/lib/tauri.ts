@@ -481,6 +481,10 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
     } as T;
   }
 
+  if (command === "record_frontend_diagnostic") {
+    return undefined as T;
+  }
+
   if (command === "get_sso_login_attempt") {
     const attemptId = typeof args?.attemptId === "string" ? args.attemptId : "";
     const attempt = previewSsoAttempts.get(attemptId);

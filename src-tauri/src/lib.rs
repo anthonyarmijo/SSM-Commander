@@ -86,6 +86,7 @@ pub fn run() {
             commands::stop_session,
             commands::list_active_sessions,
             commands::get_diagnostics,
+            commands::record_frontend_diagnostic,
             commands::open_logs_folder
         ])
         .on_window_event(|window, event| {

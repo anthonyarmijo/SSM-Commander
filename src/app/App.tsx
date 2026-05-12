@@ -3053,8 +3053,12 @@ export function App() {
           </div>
         )}
 
-        {activeView === "console" && (
-          <section className="view view--console" aria-label="Console">
+        {(activeView === "console" || consoleSessions.length > 0) && (
+          <section
+            aria-label="Console"
+            aria-hidden={activeView !== "console"}
+            className={`view view--console ${activeView !== "console" ? "view--background-console" : ""}`.trim()}
+          >
             <div className="console-tabs" role="tablist" aria-label="Console sessions">
               {consoleSessions.map((session) => (
                 <button
@@ -3220,7 +3224,7 @@ export function App() {
                 {activeConsoleSession.renderer === "xterm" ? (
                   <XtermConsole session={activeConsoleSession} />
                 ) : (
-                  <GuacamoleConsole session={activeConsoleSession} />
+                  <GuacamoleConsole isVisible={activeView === "console"} session={activeConsoleSession} />
                 )}
               </section>
             )}
@@ -3372,9 +3376,88 @@ function XtermConsole({ session }: { session: ConsoleSessionRecord }) {
   return <div className="xterm-console" ref={containerRef} />;
 }
 
-function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
+function recordRdpFrontendDiagnostic(session: ConsoleSessionRecord, message: string) {
+  void invokeCommand<void>("record_frontend_diagnostic", {
+    area: "launcher",
+    message: `Embedded RDP frontend: sessionId=${session.id}, instanceId=${session.instanceId}, ${message}`,
+  }).catch(() => {});
+}
+
+function guacamoleStateName(states: Record<string, number> | undefined, state: number): string {
+  const match = Object.entries(states ?? {}).find(([, value]) => value === state);
+  return match ? `${match[0]}(${state})` : `${state}`;
+}
+
+function sampleCanvasPixels(canvas: HTMLCanvasElement): string {
+  if (canvas.width <= 0 || canvas.height <= 0) {
+    return "empty";
+  }
+
+  try {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return "no-context";
+    }
+
+    const sampleColumns = Math.min(8, canvas.width);
+    const sampleRows = Math.min(8, canvas.height);
+    let samples = 0;
+    let nonTransparent = 0;
+    let nonBlack = 0;
+    let nonDark = 0;
+    let luminanceTotal = 0;
+    let maxLuminance = 0;
+    for (let row = 0; row < sampleRows; row += 1) {
+      const y = Math.min(canvas.height - 1, Math.floor((row * canvas.height) / sampleRows));
+      for (let column = 0; column < sampleColumns; column += 1) {
+        const x = Math.min(canvas.width - 1, Math.floor((column * canvas.width) / sampleColumns));
+        const [red, green, blue, alpha] = context.getImageData(x, y, 1, 1).data;
+        const luminance = Math.round(red * 0.2126 + green * 0.7152 + blue * 0.0722);
+        samples += 1;
+        luminanceTotal += luminance;
+        maxLuminance = Math.max(maxLuminance, luminance);
+        if (alpha > 0) {
+          nonTransparent += 1;
+        }
+        if (alpha > 0 && (red > 8 || green > 8 || blue > 8)) {
+          nonBlack += 1;
+        }
+        if (alpha > 0 && luminance > 48) {
+          nonDark += 1;
+        }
+      }
+    }
+    const avgLuminance = samples > 0 ? Math.round(luminanceTotal / samples) : 0;
+
+    return `nonBlack=${nonBlack}/${samples},nonDark=${nonDark}/${samples},avgLum=${avgLuminance},maxLum=${maxLuminance},nonTransparent=${nonTransparent}/${samples}`;
+  } catch (error) {
+    return `sampleError=${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function sampleGuacamoleDisplay(guacDisplay: {
+  flatten: () => HTMLCanvasElement;
+}): string {
+  try {
+    const canvas = guacDisplay.flatten();
+    return `${canvas.width}x${canvas.height}:${sampleCanvasPixels(canvas)}`;
+  } catch (error) {
+    return `sampleError=${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session: ConsoleSessionRecord }) {
   const displayRef = useRef<HTMLDivElement | null>(null);
+  const isVisibleRef = useRef(isVisible);
+  const scheduleDisplaySizeRef = useRef<() => void>(() => {});
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+    if (isVisible) {
+      scheduleDisplaySizeRef.current();
+    }
+  }, [isVisible]);
 
   useEffect(() => {
     const display = displayRef.current;
@@ -3386,20 +3469,68 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
     setError("");
     const tunnel = new Guacamole.WebSocketTunnel(session.bridgeUrl);
     const client = new Guacamole.Client(tunnel);
-    const element = client.getDisplay().getElement();
+    const guacDisplay = client.getDisplay();
+    const element = guacDisplay.getElement();
+    element.classList.add("guacamole-console__display-element");
     display.appendChild(element);
     let lastSize = "";
+    let lastScale = 1;
     let resizeFrame = 0;
+    let tunnelStateLogs = 0;
+    let clientStateLogs = 0;
+    let syncDiagnostics = 0;
+    const diagnosticTimers: number[] = [];
+    const recordDiagnostic = (message: string) => {
+      recordRdpFrontendDiagnostic(session, message);
+    };
+    const applyDisplayScale = () => {
+      const remoteWidth = Math.max(1, Number(guacDisplay.getWidth?.() ?? 0));
+      const remoteHeight = Math.max(1, Number(guacDisplay.getHeight?.() ?? 0));
+      const containerWidth = Math.max(1, display.clientWidth);
+      const containerHeight = Math.max(1, display.clientHeight);
+      if (remoteWidth <= 1 || remoteHeight <= 1) {
+        return;
+      }
+      const nextScale = Math.min(containerWidth / remoteWidth, containerHeight / remoteHeight);
+      const clampedScale = Math.min(3, Math.max(0.1, Number.isFinite(nextScale) ? nextScale : 1));
+      if (Math.abs(clampedScale - lastScale) < 0.005) {
+        return;
+      }
+      guacDisplay.scale(clampedScale);
+      lastScale = clampedScale;
+    };
+    const describeDisplay = (reason: string) => {
+      applyDisplayScale();
+      const containerRect = display.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const canvases = Array.from(element.querySelectorAll("canvas") as NodeListOf<HTMLCanvasElement>);
+      const canvasSummary =
+        canvases
+          .map((canvas, index) => `#${index}:${canvas.width}x${canvas.height}:${sampleCanvasPixels(canvas)}`)
+          .join(",") || "none";
+      const compositeSummary = sampleGuacamoleDisplay(guacDisplay);
+      recordDiagnostic(
+        `displaySample reason=${reason}, visible=${isVisibleRef.current}, scale=${lastScale.toFixed(3)}, container=${display.clientWidth}x${display.clientHeight}, containerRect=${Math.round(containerRect.width)}x${Math.round(containerRect.height)}, displayElement=${Math.round(elementRect.width)}x${Math.round(elementRect.height)}, childCount=${element.childElementCount}, composite=${compositeSummary}, canvases=${canvases.length} ${canvasSummary}`,
+      );
+    };
+    const scheduleDiagnostic = (reason: string, delayMs: number) => {
+      const timer = window.setTimeout(() => describeDisplay(reason), delayMs);
+      diagnosticTimers.push(timer);
+    };
     const sendDisplaySize = () => {
       resizeFrame = 0;
+      if (!isVisibleRef.current) {
+        return;
+      }
       const width = Math.max(1, Math.floor(display.clientWidth));
       const height = Math.max(1, Math.floor(display.clientHeight));
       const nextSize = `${width}x${height}`;
       if (nextSize === lastSize) {
+        applyDisplayScale();
         return;
       }
       lastSize = nextSize;
-      client.sendSize(width, height);
+      applyDisplayScale();
     };
     const scheduleDisplaySize = () => {
       if (resizeFrame) {
@@ -3407,21 +3538,62 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
       }
       resizeFrame = window.requestAnimationFrame(sendDisplaySize);
     };
-    const resizeObserver = new ResizeObserver(scheduleDisplaySize);
+    scheduleDisplaySizeRef.current = scheduleDisplaySize;
+    const resizeObserver = new ResizeObserver(() => {
+      applyDisplayScale();
+      scheduleDisplaySize();
+    });
     resizeObserver.observe(display);
+    window.addEventListener("resize", scheduleDisplaySize);
+    guacDisplay.onresize = (width: number, height: number) => {
+      applyDisplayScale();
+      scheduleDiagnostic(`display-resize-${width}x${height}`, 0);
+    };
 
     tunnel.onerror = (status: { message?: string }) => {
+      recordDiagnostic(`tunnelError=${status.message || "unknown"}`);
       setError(status.message || "RDP tunnel disconnected.");
     };
     client.onerror = (status: { message?: string }) => {
+      recordDiagnostic(`clientError=${status.message || "unknown"}`);
       setError(status.message || "RDP console disconnected.");
+    };
+    tunnel.onstatechange = (state: number) => {
+      if (tunnelStateLogs < 8) {
+        tunnelStateLogs += 1;
+        recordDiagnostic(`tunnelState=${guacamoleStateName(Guacamole.Tunnel.State, state)}`);
+      }
+      if (state === Guacamole.Tunnel.State.OPEN) {
+        lastSize = "";
+        scheduleDisplaySize();
+        scheduleDiagnostic("tunnel-open", 250);
+      }
+    };
+    client.onstatechange = (state: number) => {
+      if (clientStateLogs < 8) {
+        clientStateLogs += 1;
+        recordDiagnostic(`clientState=${guacamoleStateName(Guacamole.Client.State, state)}`);
+      }
+      if (state === Guacamole.Client.State.CONNECTED) {
+        scheduleDiagnostic("client-connected", 250);
+      }
+    };
+    client.onsync = (timestamp: number, frames: number) => {
+      if (syncDiagnostics >= 3) {
+        return;
+      }
+      syncDiagnostics += 1;
+      scheduleDiagnostic(`sync-${syncDiagnostics}-timestamp-${timestamp}-frames-${frames}`, 0);
     };
     client.connect(`token=${encodeURIComponent(session.connectionToken)}`);
     scheduleDisplaySize();
+    scheduleDiagnostic("after-connect", 1_000);
+    scheduleDiagnostic("after-connect-3s", 3_000);
+    scheduleDiagnostic("after-connect-10s", 10_000);
 
     const mouse = new Guacamole.Mouse(element);
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState: unknown) => {
-      client.sendMouseState(mouseState);
+      client.sendMouseState(mouseState, true);
     };
     const keyboard = new Guacamole.Keyboard(document);
     keyboard.onkeydown = (keysym: number) => {
@@ -3433,15 +3605,24 @@ function GuacamoleConsole({ session }: { session: ConsoleSessionRecord }) {
 
     return () => {
       resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleDisplaySize);
+      diagnosticTimers.forEach((timer) => window.clearTimeout(timer));
       if (resizeFrame) {
         window.cancelAnimationFrame(resizeFrame);
       }
       keyboard.onkeydown = null;
       keyboard.onkeyup = null;
+      client.onsync = null;
+      guacDisplay.onresize = null;
+      client.onstatechange = null;
+      client.onerror = null;
+      tunnel.onstatechange = null;
+      tunnel.onerror = null;
       client.disconnect();
+      scheduleDisplaySizeRef.current = () => {};
       display.replaceChildren();
     };
-  }, [session.bridgeUrl, session.connectionToken]);
+  }, [session.bridgeUrl, session.connectionToken, session.id, session.instanceId]);
 
   if (!session.bridgeUrl || !session.connectionToken) {
     return (

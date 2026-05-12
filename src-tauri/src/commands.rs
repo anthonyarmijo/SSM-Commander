@@ -744,9 +744,45 @@ pub fn get_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticEvent
 }
 
 #[tauri::command]
+pub fn record_frontend_diagnostic(
+    state: State<'_, AppState>,
+    area: String,
+    message: String,
+) -> Result<(), String> {
+    state.diagnostics.info(
+        frontend_diagnostic_area(&area),
+        format!(
+            "Frontend diagnostic: {}",
+            truncate_frontend_diagnostic(&message, 1_000)
+        ),
+    );
+    Ok(())
+}
+
+#[tauri::command]
 pub fn open_logs_folder() -> Result<(), String> {
     let path = preferences::logs_dir()?;
     platform::open_path(&path)
+}
+
+fn frontend_diagnostic_area(area: &str) -> DiagnosticArea {
+    match area {
+        "dependency" => DiagnosticArea::Dependency,
+        "aws" => DiagnosticArea::Aws,
+        "process" => DiagnosticArea::Process,
+        "security" => DiagnosticArea::Security,
+        _ => DiagnosticArea::Launcher,
+    }
+}
+
+fn truncate_frontend_diagnostic(message: &str, max_chars: usize) -> String {
+    let mut chars = message.chars();
+    let clipped = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{clipped}...")
+    } else {
+        clipped
+    }
 }
 
 fn wait_for_console_tunnel(state: &State<'_, AppState>, local_port: u16) -> Result<(), String> {

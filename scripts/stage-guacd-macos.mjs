@@ -63,6 +63,35 @@ function brewPrefix(formula) {
   return output("brew", ["--prefix", formula]);
 }
 
+const requiredBrewFormulaFiles = new Map([
+  ["cairo", ["include/cairo/cairo.h", "lib/libcairo.dylib", "lib/pkgconfig/cairo.pc"]],
+  ["freerdp", ["include/freerdp3/freerdp/freerdp.h", "lib/libfreerdp3.dylib", "lib/pkgconfig/freerdp3.pc"]],
+  ["jpeg-turbo", ["include/jpeglib.h", "lib/libjpeg.dylib", "lib/pkgconfig/libjpeg.pc"]],
+  ["libpng", ["include/png.h", "lib/libpng.dylib", "lib/pkgconfig/libpng.pc"]],
+  ["openssl@3", ["include/openssl/ssl.h", "lib/libssl.dylib", "lib/pkgconfig/openssl.pc"]],
+  ["ossp-uuid", ["include/ossp/uuid.h", "lib/libuuid.a", "lib/pkgconfig/uuid.pc"]],
+  ["pkgconf", ["bin/pkg-config"]],
+]);
+
+function requireBrewFormula(formula) {
+  const prefix = brewPrefix(formula);
+  const requiredFiles = requiredBrewFormulaFiles.get(formula) || [];
+  const missing = requiredFiles
+    .map((relativePath) => path.join(prefix, relativePath))
+    .filter((file) => !fs.existsSync(file));
+
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `Missing required Homebrew formula files for ${formula}. Run: brew install ${formula}`,
+        ...missing.map((file) => `  missing: ${file}`),
+      ].join("\n"),
+    );
+  }
+
+  return prefix;
+}
+
 function downloadTarball() {
   fs.mkdirSync(buildRoot, { recursive: true });
   if (fs.existsSync(tarball)) {
@@ -462,8 +491,8 @@ function main() {
     throw new Error("Missing required command: pkg-config or pkgconf (install Homebrew pkgconf).");
   }
 
-  for (const formula of ["cairo", "freerdp", "jpeg-turbo", "libpng", "openssl@3", "ossp-uuid", "pkgconf"]) {
-    brewPrefix(formula);
+  for (const formula of requiredBrewFormulaFiles.keys()) {
+    requireBrewFormula(formula);
   }
 
   downloadTarball();

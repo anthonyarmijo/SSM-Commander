@@ -2199,6 +2199,17 @@ tr.selected--primary td {
   padding: 0;
 }
 
+.view--background-console {
+  height: 720px;
+  left: -10000px;
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  visibility: hidden;
+  width: 1280px;
+}
+
 .console-tabs {
   align-items: stretch;
   background: var(--sidebar-bg);
@@ -2284,9 +2295,16 @@ tr.selected--primary td {
 }
 
 .guacamole-console__display {
+  align-items: center;
+  display: flex;
   height: 100%;
-  overflow: auto;
+  justify-content: center;
+  overflow: hidden;
   width: 100%;
+}
+
+.guacamole-console__display-element {
+  flex: 0 0 auto;
 }
 
 .guacamole-console__status,
