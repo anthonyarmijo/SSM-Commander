@@ -1483,7 +1483,7 @@ fn complete_instruction_end(input: &[u8]) -> Option<usize> {
             .parse::<usize>()
             .ok()?;
         let value_start = dot + 1;
-        let value_end = value_start.checked_add(length)?;
+        let value_end = guacamole_element_value_end(input, value_start, length)?;
         let terminator = *input.get(value_end)?;
 
         match terminator {
@@ -1494,13 +1494,47 @@ fn complete_instruction_end(input: &[u8]) -> Option<usize> {
     }
 }
 
+fn guacamole_element_value_end(
+    input: &[u8],
+    value_start: usize,
+    char_count: usize,
+) -> Option<usize> {
+    let mut index = value_start;
+    for _ in 0..char_count {
+        let width = guacamole_utf8_char_width(*input.get(index)?);
+        index = index.checked_add(width)?;
+        if index > input.len() {
+            return None;
+        }
+    }
+    Some(index)
+}
+
+fn guacamole_utf8_char_width(byte: u8) -> usize {
+    if (byte | 0x7F) == 0x7F {
+        1
+    } else if (byte | 0x1F) == 0xDF {
+        2
+    } else if (byte | 0x0F) == 0xEF {
+        3
+    } else if (byte | 0x07) == 0xF7 {
+        4
+    } else {
+        1
+    }
+}
+
+fn guacamole_char_len(value: &str) -> usize {
+    value.chars().count()
+}
+
 fn encode_instruction(opcode: &str, args: &[String]) -> String {
     let mut elements = Vec::with_capacity(args.len() + 1);
     elements.push(opcode.to_string());
     elements.extend(args.iter().cloned());
     let encoded = elements
         .iter()
-        .map(|element| format!("{}.{}", element.len(), element))
+        .map(|element| format!("{}.{}", guacamole_char_len(element), element))
         .collect::<Vec<_>>()
         .join(",");
     format!("{encoded};")
@@ -1534,7 +1568,8 @@ fn parse_instruction_opcode(input: &str) -> Result<String, String> {
         .parse::<usize>()
         .map_err(|error| format!("Malformed Guacamole element length: {error}"))?;
     let value_start = dot + 1;
-    let value_end = value_start + length;
+    let value_end = guacamole_element_value_end(input.as_bytes(), value_start, length)
+        .ok_or_else(|| "Guacamole instruction opcode is truncated".to_string())?;
     if value_end > input.len() {
         return Err("Guacamole instruction opcode is truncated".to_string());
     }
@@ -1554,10 +1589,8 @@ fn parse_instruction(input: &str) -> Result<(String, Vec<String>), String> {
             .parse::<usize>()
             .map_err(|error| format!("Malformed Guacamole element length: {error}"))?;
         let value_start = dot + 1;
-        let value_end = value_start + length;
-        if value_end > input.len() {
-            return Err("Guacamole instruction element is truncated".to_string());
-        }
+        let value_end = guacamole_element_value_end(bytes, value_start, length)
+            .ok_or_else(|| "Guacamole instruction element is truncated".to_string())?;
         elements.push(input[value_start..value_end].to_string());
         let delimiter = input.as_bytes().get(value_end).copied().unwrap_or(b';');
         index = value_end + 1;
@@ -1643,6 +1676,20 @@ mod tests {
         assert_eq!(
             parse_instruction(&encoded).unwrap(),
             ("select".to_string(), vec!["rdp".to_string()])
+        );
+    }
+
+    #[test]
+    fn encodes_guacamole_lengths_as_utf8_character_counts() {
+        let encoded = encode_instruction("connect", &["pásswörd".to_string(), "🔒".to_string()]);
+
+        assert_eq!(encoded, "7.connect,8.pásswörd,1.🔒;");
+        assert_eq!(
+            parse_instruction(&encoded).unwrap(),
+            (
+                "connect".to_string(),
+                vec!["pásswörd".to_string(), "🔒".to_string()]
+            )
         );
     }
 
