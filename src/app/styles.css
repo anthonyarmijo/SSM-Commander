@@ -2305,6 +2305,7 @@ tr.selected--primary td {
 
 .guacamole-console__display-element {
   flex: 0 0 auto;
+  outline: none;
 }
 
 .guacamole-console__status,

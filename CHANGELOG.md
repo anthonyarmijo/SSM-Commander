@@ -4,7 +4,15 @@ All notable changes to SSM Commander are tracked here.
 
 ## Wish List
 
-- Bundle platform-specific `guacd` sidecar binaries for packaged builds.
+- Improve embedded RDP scaling so the remote desktop can match the visible console pane without reintroducing handshake failures or black-screen regressions.
+
+## Unreleased
+
+### 2026-05-13
+
+- Fix embedded RDP keyboard capture so hidden console tabs no longer intercept typing in other views.
+- Keep embedded RDP on the stable `1280x720` startup path with browser-side fitting and disabled Guacamole resize negotiation after dynamic resize attempts regressed into black-screen handshakes.
+- Document the remaining embedded RDP scaling limitation: small top/bottom black bars can still appear when the console pane aspect ratio differs from the fixed remote desktop, though the rollback is more usable than the failed dynamic resize path.
 
 ## [1.0.0] - 2026-05-06
 

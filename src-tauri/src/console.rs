@@ -1249,11 +1249,13 @@ fn normalize_rdp_target_host_for_source(
 
 fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig) -> String {
     format!(
-        "Embedded RDP bridge parameters: sessionId={}, instanceId={}, rdpHost={}, rdpPort={}, username={}, domain={}, securityMode={}, guacd={}.",
+        "Embedded RDP bridge parameters: sessionId={}, instanceId={}, rdpHost={}, rdpPort={}, display={}x{}, username={}, domain={}, securityMode={}, resizeMethod=disabled, guacd={}.",
         config.session_id,
         config.instance_id,
         config.hostname,
         config.local_port,
+        config.width,
+        config.height,
         if config.username.as_deref().is_some_and(|value| !value.trim().is_empty()) {
             "provided"
         } else {
@@ -1305,8 +1307,9 @@ fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
         // FreeRDP channel while debugging the black-screen path.
         "disable-copy" => "true".to_string(),
         "disable-paste" => "true".to_string(),
-        // Avoid dynamic display update during connection setup; some RDP stacks
-        // close shortly after ready when display-update is negotiated early.
+        // The hosted Windows RDP path has proven sensitive to negotiated
+        // reconnect/display-update resizing during startup. Keep the guacd
+        // parameter empty and let the browser fit the stable initial desktop.
         "resize-method" => String::new(),
         "enable-wallpaper" => "false".to_string(),
         "enable-theming" => "false".to_string(),
@@ -2012,7 +2015,9 @@ mod tests {
         assert!(message.contains("domain=provided"));
         assert!(message.contains("rdpHost=127.0.0.1"));
         assert!(message.contains("rdpPort=3390"));
+        assert!(message.contains("display=1280x720"));
         assert!(message.contains("securityMode=tls"));
+        assert!(message.contains("resizeMethod=disabled"));
         assert!(message.contains("guacd=guacd 1.6.0"));
         assert!(!message.contains("super-secret-password"));
     }
