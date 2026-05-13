@@ -138,6 +138,10 @@ Additional setup and troubleshooting notes live in:
 - [docs/public-release-checklist.md](docs/public-release-checklist.md)
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 
+Known embedded RDP limitation: the current stable path fits a fixed `1280x720`
+remote desktop into the console pane. Small top/bottom black bars can still
+appear until dynamic VM resizing is made reliable.
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -59,6 +59,7 @@ import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacem
 import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
 import { buildConsoleSessionRequest } from "./consoleSessionRequest";
 import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormState } from "./credentialForm";
+import { DEFAULT_RDP_DISPLAY_SIZE, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
 import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
@@ -102,6 +103,8 @@ const RDP_SECURITY_MODE_OPTIONS: { value: RdpSecurityMode; label: string }[] = [
   { value: "tls", label: "TLS" },
   { value: "rdp", label: "RDP" },
 ];
+const RDP_RESIZE_DEBOUNCE_MS = 180;
+const RDP_RESIZE_METHOD = "disabled";
 const EMPTY_STATE_PROFILE_HELP =
   "The app will discover AWS CLI profiles already configured on your machine. Add one to validate access and unlock the Instances and Console views.";
 const SAVED_PROFILE_WORKSPACE_HELP =
@@ -1611,8 +1614,8 @@ export function App() {
         rdpSecurityMode,
         terminalCols: 100,
         terminalRows: 30,
-        width: 1280,
-        height: 720,
+        width: DEFAULT_RDP_DISPLAY_SIZE.width,
+        height: DEFAULT_RDP_DISPLAY_SIZE.height,
       }),
     });
     setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
@@ -3456,6 +3459,11 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
     isVisibleRef.current = isVisible;
     if (isVisible) {
       scheduleDisplaySizeRef.current();
+    } else {
+      const display = displayRef.current;
+      if (display?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement | null)?.blur();
+      }
     }
   }, [isVisible]);
 
@@ -3472,32 +3480,50 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
     const guacDisplay = client.getDisplay();
     const element = guacDisplay.getElement();
     element.classList.add("guacamole-console__display-element");
+    element.tabIndex = 0;
     display.appendChild(element);
-    let lastSize = "";
+    let targetDisplaySize: RdpDisplaySize | null = measuredRdpDisplaySize(display.clientWidth, display.clientHeight);
     let lastScale = 1;
+    let resizeDebounceTimer = 0;
     let resizeFrame = 0;
     let tunnelStateLogs = 0;
     let clientStateLogs = 0;
+    let resizeDiagnostics = 0;
     let syncDiagnostics = 0;
     const diagnosticTimers: number[] = [];
     const recordDiagnostic = (message: string) => {
       recordRdpFrontendDiagnostic(session, message);
     };
+    const describeSize = (size: RdpDisplaySize | null) => (size ? `${size.width}x${size.height}` : "unknown");
+    const getPaneSize = () => measuredRdpDisplaySize(display.clientWidth, display.clientHeight);
+    const getRemoteDisplaySize = (): RdpDisplaySize | null => {
+      const width = Math.max(1, Math.floor(Number(guacDisplay.getWidth?.() ?? 0)));
+      const height = Math.max(1, Math.floor(Number(guacDisplay.getHeight?.() ?? 0)));
+      return width <= 1 || height <= 1 ? null : { width, height };
+    };
     const applyDisplayScale = () => {
-      const remoteWidth = Math.max(1, Number(guacDisplay.getWidth?.() ?? 0));
-      const remoteHeight = Math.max(1, Number(guacDisplay.getHeight?.() ?? 0));
-      const containerWidth = Math.max(1, display.clientWidth);
-      const containerHeight = Math.max(1, display.clientHeight);
-      if (remoteWidth <= 1 || remoteHeight <= 1) {
+      const remoteSize = getRemoteDisplaySize();
+      const containerWidth = Math.floor(display.clientWidth);
+      const containerHeight = Math.floor(display.clientHeight);
+      if (!remoteSize || containerWidth <= 0 || containerHeight <= 0) {
         return;
       }
-      const nextScale = Math.min(containerWidth / remoteWidth, containerHeight / remoteHeight);
+      const nextScale = Math.min(containerWidth / remoteSize.width, containerHeight / remoteSize.height);
       const clampedScale = Math.min(3, Math.max(0.1, Number.isFinite(nextScale) ? nextScale : 1));
       if (Math.abs(clampedScale - lastScale) < 0.005) {
         return;
       }
       guacDisplay.scale(clampedScale);
       lastScale = clampedScale;
+    };
+    const recordResizeDiagnostic = (reason: string) => {
+      if (resizeDiagnostics >= 16) {
+        return;
+      }
+      resizeDiagnostics += 1;
+      recordDiagnostic(
+        `resize ${reason}, paneTarget=${describeSize(targetDisplaySize)}, remote=${describeSize(getRemoteDisplaySize())}, pane=${display.clientWidth}x${display.clientHeight}, scale=${lastScale.toFixed(3)}, resizeMethod=${RDP_RESIZE_METHOD}`,
+      );
     };
     const describeDisplay = (reason: string) => {
       applyDisplayScale();
@@ -3510,43 +3536,61 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
           .join(",") || "none";
       const compositeSummary = sampleGuacamoleDisplay(guacDisplay);
       recordDiagnostic(
-        `displaySample reason=${reason}, visible=${isVisibleRef.current}, scale=${lastScale.toFixed(3)}, container=${display.clientWidth}x${display.clientHeight}, containerRect=${Math.round(containerRect.width)}x${Math.round(containerRect.height)}, displayElement=${Math.round(elementRect.width)}x${Math.round(elementRect.height)}, childCount=${element.childElementCount}, composite=${compositeSummary}, canvases=${canvases.length} ${canvasSummary}`,
+        `displaySample reason=${reason}, visible=${isVisibleRef.current}, paneTarget=${describeSize(targetDisplaySize)}, remote=${describeSize(getRemoteDisplaySize())}, scale=${lastScale.toFixed(3)}, container=${display.clientWidth}x${display.clientHeight}, containerRect=${Math.round(containerRect.width)}x${Math.round(containerRect.height)}, displayElement=${Math.round(elementRect.width)}x${Math.round(elementRect.height)}, childCount=${element.childElementCount}, composite=${compositeSummary}, canvases=${canvases.length} ${canvasSummary}`,
       );
     };
     const scheduleDiagnostic = (reason: string, delayMs: number) => {
       const timer = window.setTimeout(() => describeDisplay(reason), delayMs);
       diagnosticTimers.push(timer);
     };
-    const sendDisplaySize = () => {
+    const refreshDisplayFit = (reason: string) => {
       resizeFrame = 0;
       if (!isVisibleRef.current) {
         return;
       }
-      const width = Math.max(1, Math.floor(display.clientWidth));
-      const height = Math.max(1, Math.floor(display.clientHeight));
-      const nextSize = `${width}x${height}`;
-      if (nextSize === lastSize) {
+      const nextTargetDisplaySize = getPaneSize();
+      if (!nextTargetDisplaySize) {
         applyDisplayScale();
+        recordResizeDiagnostic(`skipped-empty-pane-${reason}`);
         return;
       }
-      lastSize = nextSize;
+      targetDisplaySize = nextTargetDisplaySize;
       applyDisplayScale();
+      recordResizeDiagnostic(`fit-only-${reason}`);
     };
-    const scheduleDisplaySize = () => {
+    const scheduleDisplaySize = (delayMs = RDP_RESIZE_DEBOUNCE_MS, reason = "resize") => {
+      targetDisplaySize = getPaneSize() ?? targetDisplaySize;
+      applyDisplayScale();
+      if (resizeDebounceTimer) {
+        window.clearTimeout(resizeDebounceTimer);
+      }
+      resizeDebounceTimer = window.setTimeout(() => {
+        resizeDebounceTimer = 0;
+        if (resizeFrame) {
+          return;
+        }
+        resizeFrame = window.requestAnimationFrame(() => refreshDisplayFit(reason));
+      }, delayMs);
+    };
+    const scheduleImmediateDisplaySize = (reason: string) => {
+      scheduleDisplaySize(0, reason);
+    };
+    const scheduleDebouncedDisplaySize = () => {
       if (resizeFrame) {
-        return;
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = 0;
       }
-      resizeFrame = window.requestAnimationFrame(sendDisplaySize);
+      scheduleDisplaySize(RDP_RESIZE_DEBOUNCE_MS, "debounced");
     };
-    scheduleDisplaySizeRef.current = scheduleDisplaySize;
+    scheduleDisplaySizeRef.current = () => scheduleImmediateDisplaySize("visible");
     const resizeObserver = new ResizeObserver(() => {
-      applyDisplayScale();
-      scheduleDisplaySize();
+      scheduleDebouncedDisplaySize();
     });
     resizeObserver.observe(display);
-    window.addEventListener("resize", scheduleDisplaySize);
+    window.addEventListener("resize", scheduleDebouncedDisplaySize);
     guacDisplay.onresize = (width: number, height: number) => {
       applyDisplayScale();
+      recordResizeDiagnostic(`remote-${Math.round(width)}x${Math.round(height)}`);
       scheduleDiagnostic(`display-resize-${width}x${height}`, 0);
     };
 
@@ -3564,8 +3608,7 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
         recordDiagnostic(`tunnelState=${guacamoleStateName(Guacamole.Tunnel.State, state)}`);
       }
       if (state === Guacamole.Tunnel.State.OPEN) {
-        lastSize = "";
-        scheduleDisplaySize();
+        scheduleImmediateDisplaySize("tunnel-open");
         scheduleDiagnostic("tunnel-open", 250);
       }
     };
@@ -3586,7 +3629,7 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
       scheduleDiagnostic(`sync-${syncDiagnostics}-timestamp-${timestamp}-frames-${frames}`, 0);
     };
     client.connect(`token=${encodeURIComponent(session.connectionToken)}`);
-    scheduleDisplaySize();
+    scheduleImmediateDisplaySize("after-connect");
     scheduleDiagnostic("after-connect", 1_000);
     scheduleDiagnostic("after-connect-3s", 3_000);
     scheduleDiagnostic("after-connect-10s", 10_000);
@@ -3595,21 +3638,39 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState: unknown) => {
       client.sendMouseState(mouseState, true);
     };
-    const keyboard = new Guacamole.Keyboard(document);
+    const focusDisplay = () => {
+      if (isVisibleRef.current) {
+        element.focus({ preventScroll: true });
+      }
+    };
+    element.addEventListener("mousedown", focusDisplay);
+    const keyboard = new Guacamole.Keyboard(element);
     keyboard.onkeydown = (keysym: number) => {
+      if (!isVisibleRef.current) {
+        return true;
+      }
       client.sendKeyEvent(1, keysym);
+      return false;
     };
     keyboard.onkeyup = (keysym: number) => {
+      if (!isVisibleRef.current) {
+        return true;
+      }
       client.sendKeyEvent(0, keysym);
+      return false;
     };
 
     return () => {
       resizeObserver.disconnect();
-      window.removeEventListener("resize", scheduleDisplaySize);
+      window.removeEventListener("resize", scheduleDebouncedDisplaySize);
       diagnosticTimers.forEach((timer) => window.clearTimeout(timer));
+      if (resizeDebounceTimer) {
+        window.clearTimeout(resizeDebounceTimer);
+      }
       if (resizeFrame) {
         window.cancelAnimationFrame(resizeFrame);
       }
+      element.removeEventListener("mousedown", focusDisplay);
       keyboard.onkeydown = null;
       keyboard.onkeyup = null;
       client.onsync = null;

@@ -99,8 +99,7 @@ impl GuacdSidecar {
             }
         }
 
-        let candidates = guacd_launch_candidates(app);
-        if candidates.is_empty() && bridge_is_reachable() {
+        if bridge_is_reachable() {
             let ready = GuacdReady {
                 source: GuacdSource::ExistingBridge,
                 version: native_guacd_version(),
@@ -109,6 +108,8 @@ impl GuacdSidecar {
             diagnostics.info(DiagnosticArea::Dependency, ready.status_message());
             return Ok(ready);
         }
+
+        let candidates = guacd_launch_candidates(app);
 
         if candidates.is_empty() {
             return Err(
