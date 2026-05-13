@@ -3531,6 +3531,7 @@ function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session:
       }
       lastSize = nextSize;
       applyDisplayScale();
+      client.sendSize(width, height);
     };
     const scheduleDisplaySize = () => {
       if (resizeFrame) {

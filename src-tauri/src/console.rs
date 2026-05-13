@@ -1,5 +1,5 @@
 use crate::diagnostics::Diagnostics;
-use crate::guacd::{self, GuacdReady};
+use crate::guacd::{self, GuacdReady, GuacdSource};
 use crate::models::{
     ConsoleOutputEvent, ConsoleRenderer, ConsoleSessionEndedEvent, ConsoleSessionKind,
     ConsoleSessionRecord, ConsoleSessionRequest, DiagnosticArea, SessionRecord, SessionStatus,
@@ -302,6 +302,7 @@ impl GuacamoleBridge {
         height: Option<u32>,
         guacd_version: Option<String>,
         guacd_port: u16,
+        guacd_source: GuacdSource,
         diagnostics: Diagnostics,
     ) -> Result<(String, String, String), String> {
         let listener_port = self.ensure_listener()?;
@@ -311,7 +312,7 @@ impl GuacamoleBridge {
         let config = RdpBridgeConfig {
             session_id,
             instance_id,
-            hostname: configured_rdp_target_host(),
+            hostname: configured_rdp_target_host(guacd_source),
             local_port,
             username: credentials.username,
             domain: credentials.domain,
@@ -798,6 +799,7 @@ pub fn rdp_console_session(
         request.height,
         guacd_ready.version.clone(),
         guacd_ready.port,
+        guacd_ready.source,
         diagnostics.clone(),
     ) {
         Ok((url, token, diagnostic_message)) => (
@@ -900,7 +902,8 @@ fn handle_guacamole_websocket(
         prune_expired_connections(&mut bridge_state);
         let config = bridge_state
             .connections
-            .remove(&token)
+            .get(&token)
+            .cloned()
             .ok_or_else(|| "Guacamole bridge token is not active".to_string())?;
         if config.expires_at < Instant::now() {
             return Err("Guacamole bridge token expired".to_string());
@@ -1164,6 +1167,12 @@ fn normalize_rdp_credentials(username: Option<String>) -> RdpCredentials {
     if let Some((domain, user)) = trimmed.split_once('\\') {
         let domain = domain.trim();
         let user = user.trim();
+        if domain == "." && !user.is_empty() {
+            return RdpCredentials {
+                username: Some(trimmed.to_string()),
+                domain: None,
+            };
+        }
         if !domain.is_empty() && !user.is_empty() {
             return RdpCredentials {
                 username: Some(user.to_string()),
@@ -1222,8 +1231,20 @@ fn normalize_rdp_target_host(value: Option<String>) -> String {
         .to_string()
 }
 
-fn configured_rdp_target_host() -> String {
-    normalize_rdp_target_host(std::env::var(RDP_TARGET_HOST_ENV).ok())
+fn configured_rdp_target_host(guacd_source: GuacdSource) -> String {
+    normalize_rdp_target_host_for_source(guacd_source, std::env::var(RDP_TARGET_HOST_ENV).ok())
+}
+
+fn normalize_rdp_target_host_for_source(
+    guacd_source: GuacdSource,
+    configured_host: Option<String>,
+) -> String {
+    match guacd_source {
+        GuacdSource::ExistingBridge => normalize_rdp_target_host(configured_host),
+        GuacdSource::BundledSidecar | GuacdSource::NativePath => {
+            DEFAULT_RDP_TARGET_HOST.to_string()
+        }
+    }
 }
 
 fn rdp_bridge_diagnostic_message(config: &RdpBridgeConfig) -> String {
@@ -1284,24 +1305,19 @@ fn guacd_rdp_parameter_value(arg: &str, config: &RdpBridgeConfig) -> String {
         // FreeRDP channel while debugging the black-screen path.
         "disable-copy" => "true".to_string(),
         "disable-paste" => "true".to_string(),
-        // The tunnel and renderer are stable now, and the black-screen traces
-        // show real draw opcodes followed by a black default layer. Allow
-        // modern RDP display updates and richer desktop drawing for the next
-        // compatibility pass.
-        "resize-method" => "display-update".to_string(),
-        "enable-wallpaper" => "true".to_string(),
-        "enable-theming" => "true".to_string(),
-        "enable-font-smoothing" => "true".to_string(),
-        "enable-full-window-drag" => "true".to_string(),
-        "enable-desktop-composition" => "true".to_string(),
+        // Avoid dynamic display update during connection setup; some RDP stacks
+        // close shortly after ready when display-update is negotiated early.
+        "resize-method" => String::new(),
+        "enable-wallpaper" => "false".to_string(),
+        "enable-theming" => "false".to_string(),
+        "enable-font-smoothing" => String::new(),
+        "enable-full-window-drag" => String::new(),
+        "enable-desktop-composition" => String::new(),
         "enable-menu-animations" => "false".to_string(),
         "disable-bitmap-caching" => "true".to_string(),
         "disable-offscreen-caching" => "true".to_string(),
         "disable-glyph-caching" => "true".to_string(),
-        // Let FreeRDP/guacd use the RDP Graphics Pipeline when the server
-        // supports it. The old graphics path is now known to settle on a black
-        // framebuffer in the user's environment.
-        "disable-gfx" => "false".to_string(),
+        "disable-gfx" => "true".to_string(),
         _ => String::new(),
     }
 }
@@ -1562,12 +1578,14 @@ mod tests {
     use super::{
         build_guacd_rdp_connect_values, contains_ssh_password_prompt, drain_complete_instructions,
         encode_instruction, guacd_rdp_parameter_value, normalize_rdp_credentials,
-        normalize_rdp_security_mode, normalize_rdp_target_host, parse_instruction,
-        parse_instruction_opcode, rdp_bridge_diagnostic_message, rdp_security_value,
-        ssh_command_args, validate_guacamole_request, write_temp_ssh_key, GuacamoleBridge,
+        normalize_rdp_security_mode, normalize_rdp_target_host,
+        normalize_rdp_target_host_for_source, parse_instruction, parse_instruction_opcode,
+        rdp_bridge_diagnostic_message, rdp_security_value, ssh_command_args,
+        validate_guacamole_request, write_temp_ssh_key, GuacamoleBridge,
         GuacamoleDisplayDiagnostics, RdpBridgeConfig, RdpCredentials, RdpSecurityMode,
     };
     use crate::diagnostics::Diagnostics;
+    use crate::guacd::GuacdSource;
     use std::time::{Duration, Instant};
     use tungstenite::handshake::server::Request;
 
@@ -1698,6 +1716,17 @@ mod tests {
     }
 
     #[test]
+    fn preserves_dot_backslash_local_rdp_username() {
+        assert_eq!(
+            normalize_rdp_credentials(Some(".\\Administrator".to_string())),
+            RdpCredentials {
+                username: Some(".\\Administrator".to_string()),
+                domain: None,
+            }
+        );
+    }
+
+    #[test]
     fn leaves_plain_rdp_username_without_domain() {
         assert_eq!(
             normalize_rdp_credentials(Some("admin".to_string())),
@@ -1741,26 +1770,26 @@ mod tests {
         assert_eq!(guacd_rdp_parameter_value("console-audio", &config), "false");
         assert_eq!(guacd_rdp_parameter_value("disable-copy", &config), "true");
         assert_eq!(guacd_rdp_parameter_value("disable-paste", &config), "true");
-        assert_eq!(
-            guacd_rdp_parameter_value("resize-method", &config),
-            "display-update"
-        );
+        assert_eq!(guacd_rdp_parameter_value("resize-method", &config), "");
         assert_eq!(
             guacd_rdp_parameter_value("enable-wallpaper", &config),
-            "true"
+            "false"
         );
-        assert_eq!(guacd_rdp_parameter_value("enable-theming", &config), "true");
+        assert_eq!(
+            guacd_rdp_parameter_value("enable-theming", &config),
+            "false"
+        );
         assert_eq!(
             guacd_rdp_parameter_value("enable-font-smoothing", &config),
-            "true"
+            ""
         );
         assert_eq!(
             guacd_rdp_parameter_value("enable-full-window-drag", &config),
-            "true"
+            ""
         );
         assert_eq!(
             guacd_rdp_parameter_value("enable-desktop-composition", &config),
-            "true"
+            ""
         );
         assert_eq!(
             guacd_rdp_parameter_value("enable-menu-animations", &config),
@@ -1778,7 +1807,7 @@ mod tests {
             guacd_rdp_parameter_value("disable-glyph-caching", &config),
             "true"
         );
-        assert_eq!(guacd_rdp_parameter_value("disable-gfx", &config), "false");
+        assert_eq!(guacd_rdp_parameter_value("disable-gfx", &config), "true");
     }
 
     #[test]
@@ -1843,17 +1872,17 @@ mod tests {
         assert_eq!(values[17], "true");
         assert_eq!(values[18], "any");
         assert_eq!(values[19], "true");
-        assert_eq!(values[20], "display-update");
-        assert_eq!(values[21], "true");
-        assert_eq!(values[22], "true");
-        assert_eq!(values[23], "true");
-        assert_eq!(values[24], "true");
-        assert_eq!(values[25], "true");
+        assert_eq!(values[20], "");
+        assert_eq!(values[21], "false");
+        assert_eq!(values[22], "false");
+        assert_eq!(values[23], "");
+        assert_eq!(values[24], "");
+        assert_eq!(values[25], "");
         assert_eq!(values[26], "false");
         assert_eq!(values[27], "true");
         assert_eq!(values[28], "true");
         assert_eq!(values[29], "true");
-        assert_eq!(values[30], "false");
+        assert_eq!(values[30], "true");
     }
 
     #[test]
@@ -1966,6 +1995,31 @@ mod tests {
     }
 
     #[test]
+    fn ignores_docker_rdp_host_for_host_side_guacd() {
+        assert_eq!(
+            normalize_rdp_target_host_for_source(
+                GuacdSource::ExistingBridge,
+                Some(" host.docker.internal ".to_string()),
+            ),
+            "host.docker.internal"
+        );
+        assert_eq!(
+            normalize_rdp_target_host_for_source(
+                GuacdSource::BundledSidecar,
+                Some(" host.docker.internal ".to_string()),
+            ),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            normalize_rdp_target_host_for_source(
+                GuacdSource::NativePath,
+                Some(" host.docker.internal ".to_string()),
+            ),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
     fn validates_local_guacamole_websocket_requests() {
         let token = "demo-token-bridge";
         let request = guacamole_request(&format!("/rdp?token={token}"), "http://127.0.0.1:1420");
@@ -1995,6 +2049,7 @@ mod tests {
                 None,
                 Some("guacd 1.6.0".to_string()),
                 4822,
+                GuacdSource::ExistingBridge,
                 Diagnostics::default(),
             )
             .unwrap();
