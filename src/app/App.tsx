@@ -226,6 +226,15 @@ function PlusIcon() {
   );
 }
 
+function EditIcon() {
+  return (
+    <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
 function ChevronDownIcon() {
   return (
     <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
@@ -2597,7 +2606,7 @@ export function App() {
                         </div>
                       )}
                       {credentialForm.sshAuthMode === "privateKeyContent" && (
-                        <label>
+                        <label className="credential-editor__wide-field">
                           SSH private key
                           <textarea
                             onChange={(event) => setCredentialForm((current) => ({ ...current, sshPrivateKeyContent: event.target.value }))}
@@ -2654,16 +2663,18 @@ export function App() {
                     <div className="credential-list">
                       {credentials.map((credential) => (
                         <div className="credential-row" key={credential.id}>
-                          <div>
+                          <div className="credential-row__summary">
                             <strong>{credential.label}</strong>
                             <span>{credentialKindLabel(credential.kind)}{credential.username ? ` - ${credential.username}` : ""}</span>
                           </div>
                           <StatusPill label={credential.isDefault ? "default" : credential.kind} tone={credential.isDefault ? "good" : "neutral"} />
-                          <button onClick={() => void editCredential(credential.id)} type="button">Edit</button>
-                          <button onClick={() => void setDefaultCredential(credential.kind, credential.isDefault ? "" : credential.id)} type="button">
-                            {credential.isDefault ? "Clear default" : "Make default"}
-                          </button>
-                          <button className="button-ghost" onClick={() => void deleteCredential(credential.id)} type="button">Delete</button>
+                          <div className="credential-row__actions">
+                            <button onClick={() => void editCredential(credential.id)} type="button">Edit</button>
+                            <button onClick={() => void setDefaultCredential(credential.kind, credential.isDefault ? "" : credential.id)} type="button">
+                              {credential.isDefault ? "Clear default" : "Make default"}
+                            </button>
+                            <button className="button-ghost" onClick={() => void deleteCredential(credential.id)} type="button">Delete</button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2845,107 +2856,111 @@ export function App() {
                           <button className={instanceConnectionKind === "shell" ? "active" : ""} onClick={() => setInstanceConnectionKind("shell")} type="button">Shell</button>
                         </div>
 
-                        {instanceCredentialKind && (
-                          credentialStatus?.unlocked ? (
-                            <div className="connection-credential-control">
+                        <div className="connection-actions__body">
+                          {instanceCredentialKind && (
+                            credentialStatus?.unlocked ? (
+                              <div className="connection-credential-control">
+                                <label>
+                                  Saved credential
+                                  <select onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)} value={selectedInstanceCredentialId}>
+                                    <option value="">Manual entry</option>
+                                    {instanceCredentialOptions.map((credential) => (
+                                      <option key={credential.id} value={credential.id}>
+                                        {credential.isDefault ? `${credential.label} (default)` : credential.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <button
+                                  aria-label={`Create ${credentialKindLabel(instanceCredentialKind)} credential`}
+                                  className="button-secondary connection-credential-control__add"
+                                  onClick={() => createConnectionCredential(instanceCredentialKind)}
+                                  title={`Create ${credentialKindLabel(instanceCredentialKind)} credential`}
+                                  type="button"
+                                >
+                                  +
+                                </button>
+                                <button
+                                  aria-label="Edit selected credential"
+                                  className="button-secondary connection-credential-control__edit"
+                                  disabled={!selectedInstanceCredentialId}
+                                  onClick={() => void editConnectionCredential(selectedInstanceCredentialId)}
+                                  title="Edit selected credential"
+                                  type="button"
+                                >
+                                  <EditIcon />
+                                </button>
+                              </div>
+                            ) : (
+                              <button className="button-secondary" onClick={() => createConnectionCredential(instanceCredentialKind)} type="button">
+                                Create {credentialKindLabel(instanceCredentialKind)} credential
+                              </button>
+                            )
+                          )}
+
+                          {instanceConnectionKind === "ssh" && (
+                            <div className="connection-actions__fields connection-actions__fields--ssh">
                               <label>
-                                Saved credential
-                                <select onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)} value={selectedInstanceCredentialId}>
-                                  <option value="">Manual entry</option>
-                                  {instanceCredentialOptions.map((credential) => (
-                                    <option key={credential.id} value={credential.id}>
-                                      {credential.isDefault ? `${credential.label} (default)` : credential.label}
-                                    </option>
+                                SSH user
+                                <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
+                              </label>
+                              <label>
+                                SSH password
+                                <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
+                              </label>
+                              <div className="field-group">
+                                <span className="field-group__label">SSH key path</span>
+                                <div className="path-input-row">
+                                  <input {...technicalInputProps} onChange={(event) => {
+                                    setSshKeyPath(event.target.value);
+                                    setSshPrivateKeyContent("");
+                                  }} placeholder="Optional" value={sshKeyPath} />
+                                  <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {instanceConnectionKind === "rdp" && (
+                            <div className="connection-actions__fields connection-actions__fields--rdp">
+                              <label>
+                                RDP username
+                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                              </label>
+                              <label>
+                                RDP domain
+                                <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
+                              </label>
+                              <label>
+                                RDP password
+                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                              </label>
+                              <label>
+                                RDP security
+                                <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
+                                  {RDP_SECURITY_MODE_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
                                   ))}
                                 </select>
                               </label>
-                              <button
-                                aria-label={`Create ${credentialKindLabel(instanceCredentialKind)} credential`}
-                                className="button-secondary connection-credential-control__add"
-                                onClick={() => createConnectionCredential(instanceCredentialKind)}
-                                title={`Create ${credentialKindLabel(instanceCredentialKind)} credential`}
-                                type="button"
-                              >
-                                +
-                              </button>
-                              <button
-                                className="button-secondary connection-credential-control__edit"
-                                disabled={!selectedInstanceCredentialId}
-                                onClick={() => void editConnectionCredential(selectedInstanceCredentialId)}
-                                type="button"
-                              >
-                                Edit selected credential
-                              </button>
                             </div>
-                          ) : (
-                            <button className="button-secondary" onClick={() => createConnectionCredential(instanceCredentialKind)} type="button">
-                              Create {credentialKindLabel(instanceCredentialKind)} credential
-                            </button>
-                          )
-                        )}
+                          )}
 
-                        {instanceConnectionKind === "ssh" && (
-                          <>
-                            <label>
-                              SSH user
-                              <input {...technicalInputProps} onChange={(event) => setSshUser(event.target.value)} value={sshUser} />
-                            </label>
-                            <label>
-                              SSH password
-                              <input {...technicalInputProps} onChange={(event) => setSshPassword(event.target.value)} placeholder="Optional" type="password" value={sshPassword} />
-                            </label>
-                            <div className="field-group">
-                              <span className="field-group__label">SSH key path</span>
-                              <div className="path-input-row">
-                                <input {...technicalInputProps} onChange={(event) => {
-                                  setSshKeyPath(event.target.value);
-                                  setSshPrivateKeyContent("");
-                                }} placeholder="Optional" value={sshKeyPath} />
-                                <button onClick={() => void browseForSshKeyPath()} type="button">Browse</button>
-                              </div>
-                            </div>
-                          </>
-                        )}
-
-                        {instanceConnectionKind === "rdp" && (
-                          <>
-                            <label>
-                              RDP username
-                              <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
-                            </label>
-                            <label>
-                              RDP domain
-                              <input {...technicalInputProps} onChange={(event) => setRdpDomain(event.target.value)} placeholder="Optional" value={rdpDomain} />
-                            </label>
-                            <label>
-                              RDP password
-                              <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
-                            </label>
-                            <label>
-                              RDP security
-                              <select {...technicalInputProps} onChange={(event) => setRdpSecurityMode(event.target.value as RdpSecurityMode)} value={rdpSecurityMode}>
-                                {RDP_SECURITY_MODE_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
-                            </label>
-                          </>
-                        )}
-
-                        {instanceConnectionKind !== "shell" && (
-                          <>
-                            <label className="instance-port-toggle">
-                              <input checked={isInstancePortMappingEnabled} onChange={(event) => setIsInstancePortMappingEnabled(event.target.checked)} type="checkbox" />
-                              <span>User-defined port mapping</span>
-                            </label>
-                            {isInstancePortMappingEnabled && (
-                              <label>
-                                Local port
-                                <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="49152" value={customLocalPort} />
+                          {instanceConnectionKind !== "shell" && (
+                            <>
+                              <label className="instance-port-toggle">
+                                <input checked={isInstancePortMappingEnabled} onChange={(event) => setIsInstancePortMappingEnabled(event.target.checked)} type="checkbox" />
+                                <span>User-defined port mapping</span>
                               </label>
-                            )}
-                          </>
-                        )}
+                              {isInstancePortMappingEnabled && (
+                                <label>
+                                  Local port
+                                  <input {...technicalInputProps} onChange={(event) => setCustomLocalPort(event.target.value)} placeholder="49152" value={customLocalPort} />
+                                </label>
+                              )}
+                            </>
+                          )}
+                        </div>
 
                         <div className="action-stack connection-actions__buttons">
                           <button
