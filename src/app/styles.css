@@ -1939,6 +1939,28 @@ tr.selected--primary td {
   padding-top: 14px;
 }
 
+.connection-actions__body {
+  align-content: start;
+  display: grid;
+  gap: 7px;
+  min-height: 236px;
+}
+
+.connection-actions__fields {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connection-actions__fields .field-group {
+  grid-column: 1 / -1;
+}
+
+.connection-actions label,
+.connection-actions .field-group {
+  gap: 4px;
+}
+
 .connection-actions__buttons {
   grid-template-columns: repeat(2, max-content);
   justify-content: start;
@@ -1990,14 +2012,35 @@ tr.selected--primary td {
   gap: 14px;
 }
 
+.credential-editor {
+  gap: 12px;
+}
+
+.credential-editor .section-heading,
+.credential-editor .button-row,
+.credential-editor .field-group,
+.credential-editor__wide-field {
+  grid-column: 1 / -1;
+}
+
+.credential-editor .section-heading h2 {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.credential-editor input,
+.credential-editor select {
+  padding-block: 8px;
+}
+
 .credential-editor textarea {
-  min-height: 160px;
+  min-height: 120px;
   resize: vertical;
 }
 
 .credential-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .credential-row {
@@ -2005,15 +2048,34 @@ tr.selected--primary td {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-  padding: 10px;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto max-content;
+  padding: 9px 10px;
 }
 
-.credential-row div {
+.credential-list-panel .section-heading h2 {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.credential-row__summary {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.credential-row__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.credential-row__actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  white-space: nowrap;
 }
 
 .credential-row strong,
@@ -2215,7 +2277,7 @@ tr.selected--primary td {
   background: var(--sidebar-bg);
   border-bottom: 1px solid var(--line);
   display: flex;
-  min-height: 42px;
+  min-height: 34px;
   overflow-x: auto;
 }
 
@@ -2228,19 +2290,27 @@ tr.selected--primary td {
   border-radius: 0;
   color: var(--text-muted);
   display: inline-flex;
-  gap: 8px;
-  min-width: 42px;
+  gap: 6px;
+  min-width: 34px;
 }
 
 .console-tab {
-  max-width: 300px;
-  padding: 7px 10px;
+  font-size: 12px;
+  max-width: 240px;
+  padding: 5px 8px;
 }
 
 .console-tab > span:first-child {
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.console-tab .status-pill {
+  font-size: 10px;
+  min-width: 42px;
+  padding: 2px 6px;
 }
 
 .console-tab--active {
@@ -2254,9 +2324,9 @@ tr.selected--primary td {
   color: var(--text-muted);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 24px;
+  height: 20px;
   justify-content: center;
-  width: 24px;
+  width: 20px;
 }
 
 .console-tab__close:hover {
@@ -2265,14 +2335,14 @@ tr.selected--primary td {
 }
 
 .console-tab__close .button-icon {
-  height: 13px;
-  width: 13px;
+  height: 12px;
+  width: 12px;
 }
 
 .console-tabs__add {
   justify-content: center;
   padding: 0;
-  width: 42px;
+  width: 34px;
 }
 
 .console-workspace {
@@ -2687,8 +2757,8 @@ tr.selected--primary td {
     grid-template-columns: 1fr;
   }
 
-  .credential-row {
-    grid-template-columns: 1fr;
+  .credential-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .instance-detail-panel {
@@ -2771,6 +2841,22 @@ tr.selected--primary td {
 
   .profile-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .credential-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-row {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .credential-row__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 
@@ -2917,10 +3003,10 @@ a,
     var(--app-bg);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 72px 24px 24px;
+  padding: 48px 24px 24px;
 }
 
 .resource-pane__header {
@@ -3131,8 +3217,8 @@ a,
 .inspector-hero {
   align-items: center;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr);
   min-width: 0;
 }
 
@@ -3142,9 +3228,9 @@ a,
   border-radius: 999px;
   color: #73737a;
   display: inline-flex;
-  height: 36px;
+  height: 32px;
   justify-content: center;
-  width: 36px;
+  width: 32px;
 }
 
 .inspector-hero__icon--running {
@@ -3178,8 +3264,8 @@ a,
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(86px, 0.65fr) minmax(0, 1fr);
-  min-height: 36px;
-  padding: 8px 10px;
+  min-height: 31px;
+  padding: 6px 10px;
 }
 
 .inspector-card.detail-stack div:last-child,
@@ -3211,15 +3297,15 @@ a,
 
 .inspector-section {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .inspector-section--power h3 {
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .inspector-section h3 {
-  margin: 10px 10px 2px;
+  margin: 4px 10px 0;
 }
 
 .inspector-section--tags {
@@ -3274,8 +3360,8 @@ a,
 .connection-credential-control {
   align-items: end;
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(150px, 0.78fr) 34px max-content;
+  gap: 6px;
+  grid-template-columns: minmax(150px, 1fr) 30px 30px;
   max-width: 100%;
 }
 
@@ -3286,18 +3372,26 @@ a,
 .connection-credential-control__add {
   align-items: center;
   display: inline-flex;
-  font-size: 18px;
-  height: 34px;
+  font-size: 16px;
+  height: 30px;
   justify-content: center;
   line-height: 1;
   padding: 0;
-  width: 34px;
+  width: 30px;
 }
 
 .connection-credential-control__edit {
-  height: 34px;
-  padding-inline: 11px;
-  white-space: nowrap;
+  align-items: center;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.connection-credential-control__edit .button-icon {
+  height: 14px;
+  width: 14px;
 }
 
 .resource-pane--inspector input:not([type="checkbox"]),
@@ -3305,7 +3399,8 @@ a,
   background: rgba(242, 242, 243, 0.72);
   border-color: transparent;
   border-radius: 8px;
-  min-height: 34px;
+  min-height: 30px;
+  padding-block: 6px;
 }
 
 .resource-pane--inspector .segmented-control {
@@ -3512,10 +3607,11 @@ a,
   }
 
   .connection-credential-control {
-    grid-template-columns: minmax(0, 1fr) 34px;
+    grid-template-columns: minmax(0, 1fr) 30px 30px;
   }
 
-  .connection-credential-control__edit {
+  .connection-actions__fields {
     grid-column: 1 / -1;
+    grid-template-columns: 1fr;
   }
 }
