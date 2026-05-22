@@ -9,6 +9,7 @@
     "start": "node scripts/dev-local.mjs",
     "predev": "node scripts/free-dev-port.mjs",
     "dev": "vite --host 127.0.0.1",
+    "clean:tauri": "node scripts/clean-tauri.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "build": "tsc && vite build",

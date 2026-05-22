@@ -2889,21 +2889,7 @@ a,
   backdrop-filter: blur(28px) saturate(1.28);
   border-right: 1px solid rgba(0, 0, 0, 0.08);
   gap: 14px;
-  padding: 46px 10px 12px;
-}
-
-.sidebar::before {
-  content: "";
-  display: block;
-  height: 12px;
-  left: 16px;
-  position: absolute;
-  top: 17px;
-  width: 52px;
-  background:
-    radial-gradient(circle at 6px 6px, #ff5f57 0 6px, transparent 6.5px),
-    radial-gradient(circle at 26px 6px, #febc2e 0 6px, transparent 6.5px),
-    radial-gradient(circle at 46px 6px, #28c840 0 6px, transparent 6.5px);
+  padding: 12px 10px;
 }
 
 .side-nav {
