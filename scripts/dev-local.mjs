@@ -1,7 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const srcTauriDir = path.join(repoRoot, "src-tauri");
 const containerName = "ssm-commander-guacd";
 const guacdImage = "guacamole/guacd";
 const guacdHost = "127.0.0.1";
@@ -16,6 +21,7 @@ let guacdMonitor;
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
+    cwd: options.cwd,
     encoding: "utf8",
     stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
   });
@@ -49,6 +55,87 @@ function ensureDocker() {
     info,
     "Docker is installed, but the Docker daemon is not running. Start Docker Desktop and try again.",
   );
+}
+
+function resolveCargoTargetDir() {
+  if (!process.env.CARGO_TARGET_DIR) {
+    return path.join(srcTauriDir, "target");
+  }
+
+  return path.isAbsolute(process.env.CARGO_TARGET_DIR)
+    ? process.env.CARGO_TARGET_DIR
+    : path.resolve(srcTauriDir, process.env.CARGO_TARGET_DIR);
+}
+
+function readTextFile(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile() || stats.size > 1024 * 1024) {
+      return "";
+    }
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function candidateCargoMetadataFiles(targetDir) {
+  const files = [];
+
+  for (const profile of ["debug", "release"]) {
+    const buildDir = path.join(targetDir, profile, "build");
+    let entries;
+
+    try {
+      entries = fs.readdirSync(buildDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const packageBuildDir = path.join(buildDir, entry.name);
+      files.push(path.join(packageBuildDir, "root-output"));
+      files.push(path.join(packageBuildDir, "output"));
+    }
+  }
+
+  return files;
+}
+
+function findStaleCargoTargetPath() {
+  const targetDir = resolveCargoTargetDir();
+  const currentTargetPrefix = `${path.resolve(targetDir)}${path.sep}`;
+  const targetPathPattern = /\/[^\s"'`]+\/src-tauri\/target(?:\/[^\s"'`]*)?/g;
+
+  for (const filePath of candidateCargoMetadataFiles(targetDir)) {
+    const contents = readTextFile(filePath);
+    const matches = contents.match(targetPathPattern) ?? [];
+    const stalePath = matches.find((match) => !path.resolve(match).startsWith(currentTargetPrefix));
+
+    if (stalePath) {
+      return stalePath;
+    }
+  }
+
+  return undefined;
+}
+
+function cleanTauriBuildCache(reason) {
+  console.log(`Detected stale Tauri/Cargo build cache path: ${reason}`);
+  console.log("Cleaning src-tauri Cargo build cache before starting...");
+  const result = run("cargo", ["clean"], { cwd: srcTauriDir, stdio: "inherit" });
+  requireSuccess(result, "Could not clean the Tauri Cargo build cache.");
+}
+
+function cleanStaleTauriBuildCache() {
+  const stalePath = findStaleCargoTargetPath();
+
+  if (stalePath) {
+    cleanTauriBuildCache(stalePath);
+  }
 }
 
 function portIsOpen() {
@@ -239,6 +326,7 @@ process.on("uncaughtException", async (error) => {
 });
 
 try {
+  cleanStaleTauriBuildCache();
   ensureDocker();
   const removedContainer = removeNamedContainer();
   if (removedContainer) {
