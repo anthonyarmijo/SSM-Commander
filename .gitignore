@@ -1,5 +1,6 @@
 .DS_Store
 .codex/
+.codegraph/
 .vscode/
 .cache/
 node_modules/
