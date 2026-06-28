@@ -374,6 +374,7 @@ pub struct UserPreferences {
     pub preferred_rdp_client: Option<String>,
     pub theme_mode: Option<String>,
     pub sidebar_width: Option<u16>,
+    pub instance_browser_width: Option<u16>,
     pub instance_table_visible_columns: Option<Vec<String>>,
     pub instance_table_column_widths: Option<std::collections::HashMap<String, u16>>,
     pub profile_validation_cache:

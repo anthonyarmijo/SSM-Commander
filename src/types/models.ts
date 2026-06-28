@@ -241,6 +241,7 @@ export interface UserPreferences {
   preferredRdpClient?: string | null;
   themeMode?: ThemeMode | null;
   sidebarWidth?: number | null;
+  instanceBrowserWidth?: number | null;
   instanceTableVisibleColumns?: string[] | null;
   instanceTableColumnWidths?: Record<string, number> | null;
   profileValidationCache?: Record<string, CachedProfileValidation> | null;

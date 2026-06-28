@@ -45,7 +45,6 @@ import {
 import {
   buildProfileStatusLabel,
   buildProfileStatusMessage,
-  buildProfileOverview,
   getAddableProfiles,
   getProfileCapability,
   normalizeSavedProfiles,
@@ -95,6 +94,11 @@ const DEFAULT_SIDEBAR_WIDTH = 190;
 const MIN_SIDEBAR_WIDTH = 164;
 const MAX_SIDEBAR_WIDTH = 260;
 const SIDEBAR_KEYBOARD_STEP = 16;
+const DEFAULT_INSTANCE_BROWSER_WIDTH = 430;
+const MIN_INSTANCE_BROWSER_WIDTH = 330;
+const MAX_INSTANCE_BROWSER_WIDTH = 640;
+const MIN_INSTANCE_INSPECTOR_WIDTH = 360;
+const INSTANCE_PANE_KEYBOARD_STEP = 24;
 const INSTANCE_COLUMN_MENU_ID = "instances-column-menu";
 const RDP_SECURITY_MODE_OPTIONS: { value: RdpSecurityMode; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -131,6 +135,22 @@ function formatDependencyDetail(check: DependencyCheck): string {
 
 function clampSidebarWidth(width: number): number {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function getMaxInstanceBrowserWidth(sidebarWidth: number): number {
+  if (typeof window === "undefined") return MAX_INSTANCE_BROWSER_WIDTH;
+  const availableWorkspaceWidth = Math.max(0, window.innerWidth - sidebarWidth);
+  return Math.max(
+    MIN_INSTANCE_BROWSER_WIDTH,
+    Math.min(MAX_INSTANCE_BROWSER_WIDTH, availableWorkspaceWidth - MIN_INSTANCE_INSPECTOR_WIDTH),
+  );
+}
+
+function clampInstanceBrowserWidth(width: number, sidebarWidth: number): number {
+  return Math.min(
+    getMaxInstanceBrowserWidth(sidebarWidth),
+    Math.max(MIN_INSTANCE_BROWSER_WIDTH, Math.round(width)),
+  );
 }
 
 function getSystemTheme(): ResolvedTheme {
@@ -526,6 +546,8 @@ export function App() {
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => getSystemTheme());
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [instanceBrowserWidth, setInstanceBrowserWidth] = useState(DEFAULT_INSTANCE_BROWSER_WIDTH);
+  const [isResizingInstanceBrowser, setIsResizingInstanceBrowser] = useState(false);
   const [instanceTableVisibleColumns, setInstanceTableVisibleColumns] = useState<InstanceTableColumnId[]>(defaultInstanceTableVisibleColumns);
   const [instanceTableColumnWidths, setInstanceTableColumnWidths] = useState<InstanceTableColumnWidths>({});
   const [instanceSort, setInstanceSort] = useState<InstanceTableSort | null>(null);
@@ -593,7 +615,11 @@ export function App() {
     : null;
   const showInstancesRefreshing = isInstancesLoading && instances.length > 0;
   const showInitialInstancesLoader = isInstancesLoading && instances.length === 0;
-  const appShellStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
+  const instanceBrowserMaxWidth = getMaxInstanceBrowserWidth(sidebarWidth);
+  const appShellStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+    "--instance-browser-width": `${instanceBrowserWidth}px`,
+  } as CSSProperties;
   const isMenuSelectionRetained = activeView === "instances" && Boolean(selectedInstance);
   const shouldShowHomeNotice = !["Ready.", "Environment is ready."].includes(notice.trim());
   const hasInstancesNoticeError = activeProfileState?.authStatus === "error";
@@ -784,6 +810,12 @@ export function App() {
     const nextWidth = clampSidebarWidth(width);
     setSidebarWidth(nextWidth);
     await savePreferencesPatch({ sidebarWidth: nextWidth });
+  }
+
+  async function persistInstanceBrowserWidth(width: number) {
+    const nextWidth = clampInstanceBrowserWidth(width, sidebarWidth);
+    setInstanceBrowserWidth(nextWidth);
+    await savePreferencesPatch({ instanceBrowserWidth: nextWidth });
   }
 
   async function persistInstanceTableColumnWidths(nextWidths: InstanceTableColumnWidths) {
@@ -1035,6 +1067,9 @@ export function App() {
 
     const nextThemeMode = isThemeMode(prefs.themeMode) ? prefs.themeMode : "system";
     const nextSidebarWidth = typeof prefs.sidebarWidth === "number" ? clampSidebarWidth(prefs.sidebarWidth) : DEFAULT_SIDEBAR_WIDTH;
+    const nextInstanceBrowserWidth = typeof prefs.instanceBrowserWidth === "number"
+      ? clampInstanceBrowserWidth(prefs.instanceBrowserWidth, nextSidebarWidth)
+      : clampInstanceBrowserWidth(DEFAULT_INSTANCE_BROWSER_WIDTH, nextSidebarWidth);
     const initialVisibleColumns = normalizeInitialInstanceTableVisibleColumns(prefs.instanceTableVisibleColumns);
     const nextVisibleColumns = initialVisibleColumns.columns;
     const nextColumnWidths = normalizeInstanceTableColumnWidths(prefs.instanceTableColumnWidths);
@@ -1045,6 +1080,7 @@ export function App() {
       ...sanitizedPrefs,
       themeMode: nextThemeMode,
       sidebarWidth: nextSidebarWidth,
+      instanceBrowserWidth: nextInstanceBrowserWidth,
       instanceTableVisibleColumns: nextVisibleColumns,
       instanceTableColumnWidths: nextColumnWidths,
       savedProfiles: normalizedSavedProfiles,
@@ -1058,6 +1094,7 @@ export function App() {
     setSshKeyPath(prefs.sshKeyPath || "");
     setThemeMode(nextThemeMode);
     setSidebarWidth(nextSidebarWidth);
+    setInstanceBrowserWidth(nextInstanceBrowserWidth);
     setInstanceTableVisibleColumns(nextVisibleColumns);
     setInstanceTableColumnWidths(nextColumnWidths);
     setProfileStates((current) => buildInitialProfileStates(current, normalizedSavedProfiles, prefs));
@@ -1697,6 +1734,39 @@ export function App() {
     void persistSidebarWidth(nextWidth);
   }
 
+  function startInstanceBrowserResize(event: ReactMouseEvent<HTMLDivElement>) {
+    if (window.matchMedia("(max-width: 860px)").matches) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = instanceBrowserWidth;
+    setIsResizingInstanceBrowser(true);
+
+    function handleMouseMove(moveEvent: MouseEvent) {
+      setInstanceBrowserWidth(clampInstanceBrowserWidth(startWidth + moveEvent.clientX - startX, sidebarWidth));
+    }
+
+    function handleMouseUp(upEvent: MouseEvent) {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      setIsResizingInstanceBrowser(false);
+      void persistInstanceBrowserWidth(startWidth + upEvent.clientX - startX);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }
+
+  function handleInstanceBrowserResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    let nextWidth: number | null = null;
+    if (event.key === "ArrowLeft") nextWidth = instanceBrowserWidth - INSTANCE_PANE_KEYBOARD_STEP;
+    if (event.key === "ArrowRight") nextWidth = instanceBrowserWidth + INSTANCE_PANE_KEYBOARD_STEP;
+    if (event.key === "Home") nextWidth = MIN_INSTANCE_BROWSER_WIDTH;
+    if (event.key === "End") nextWidth = instanceBrowserMaxWidth;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    void persistInstanceBrowserWidth(nextWidth);
+  }
+
   function startInstanceColumnResize(event: ReactMouseEvent<HTMLSpanElement>, columnId: InstanceTableColumnId) {
     event.preventDefault();
     event.stopPropagation();
@@ -1794,6 +1864,16 @@ export function App() {
       setInstanceSort(null);
     }
   }, [instanceSort, instanceTableVisibleColumns]);
+
+  useEffect(() => {
+    function clampBrowserPaneToViewport() {
+      setInstanceBrowserWidth((current) => clampInstanceBrowserWidth(current, sidebarWidth));
+    }
+
+    clampBrowserPaneToViewport();
+    window.addEventListener("resize", clampBrowserPaneToViewport);
+    return () => window.removeEventListener("resize", clampBrowserPaneToViewport);
+  }, [sidebarWidth]);
 
   useEffect(() => {
     if (
@@ -2089,7 +2169,7 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${isMenuSelectionRetained ? "app-shell--resource-focused" : ""} ${isResizingSidebar || isResizingTableColumn ? "app-shell--resizing" : ""}`.trim()}
+      className={`app-shell ${isMenuSelectionRetained ? "app-shell--resource-focused" : ""} ${isResizingSidebar || isResizingInstanceBrowser || isResizingTableColumn ? "app-shell--resizing" : ""}`.trim()}
       style={appShellStyle}
     >
       <aside className="sidebar" aria-label="Primary navigation">
@@ -2345,12 +2425,32 @@ export function App() {
                     const profileState = getProfileState(profileName);
                     const isActive = activeProfile === profileName;
                     const detailsExpanded = expandedProfileDetails[profileName] ?? shouldAutoExpandProfileDetails(profileState);
-                    const overviewItems = buildProfileOverview(profileState);
                     const authCapability = getProfileCapability(profileState, "auth");
                     const regionsCapability = getProfileCapability(profileState, "regions");
                     const ec2Capability = getProfileCapability(profileState, "ec2");
                     const ssmCapability = getProfileCapability(profileState, "ssm");
                     const regionChipSummary = summarizeRegionChips(regionsCapability?.regions);
+                    const regionCount = regionsCapability?.regions?.length ?? 0;
+                    const profileFacts = [
+                      {
+                        label: "Account",
+                        value: authCapability?.account ?? "Unchecked",
+                      },
+                      {
+                        label: "Regions",
+                        value: regionCount > 0 ? String(regionCount) : "Unchecked",
+                      },
+                      {
+                        label: "EC2",
+                        value: typeof ec2Capability?.visibleInstanceCount === "number" ? String(ec2Capability.visibleInstanceCount) : "Unchecked",
+                        detail: ec2Capability?.regionName,
+                      },
+                      {
+                        label: "SSM",
+                        value: typeof ssmCapability?.managedNodeCount === "number" ? String(ssmCapability.managedNodeCount) : "Unchecked",
+                        detail: ssmCapability?.regionName,
+                      },
+                    ];
 
                     return (
                       <section className="profile-card" key={profileName}>
@@ -2371,18 +2471,22 @@ export function App() {
                           </div>
                         </div>
 
-                        <div className={`validation-state validation-state--${profileStateClass(profileState)}`}>
+                        <div className={`validation-state validation-state--${profileStateClass(profileState)} profile-card__status`}>
                           <StatusPill label={buildProfileStatusLabel(profileState)} tone={authTone(profileState)} />
                           <p>{buildProfileStatusMessage(profileState)}</p>
                         </div>
 
-                        {overviewItems.length > 0 && (
-                          <div className="profile-card__overview">
-                            {overviewItems.map((item) => (
-                              <span className="profile-card__overview-item" key={`${profileName}-${item}`}>{item}</span>
-                            ))}
-                          </div>
-                        )}
+                        <dl className="profile-card__facts" aria-label={`${profileName} profile summary`}>
+                          {profileFacts.map((fact) => (
+                            <div className="profile-card__fact" key={`${profileName}-${fact.label}`}>
+                              <dt>{fact.label}</dt>
+                              <dd>
+                                <strong>{fact.value}</strong>
+                                {fact.detail && <span>{fact.detail}</span>}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
 
                         <div className="profile-card__actions">
                           {(profileState.authStatus === "expired" || profileState.busy === "sso" || Boolean(profileState.ssoAttemptId)) ? (
@@ -2776,6 +2880,19 @@ export function App() {
                 )}
               </div>
             </section>
+
+            <div
+              aria-label="Resize instance browser pane"
+              aria-orientation="vertical"
+              aria-valuemax={instanceBrowserMaxWidth}
+              aria-valuemin={MIN_INSTANCE_BROWSER_WIDTH}
+              aria-valuenow={instanceBrowserWidth}
+              className="resource-pane-resize-handle"
+              onKeyDown={handleInstanceBrowserResizeKeyDown}
+              onMouseDown={startInstanceBrowserResize}
+              role="separator"
+              tabIndex={0}
+            />
 
             <aside className="resource-pane resource-pane--inspector" aria-label="Instance actions and configuration">
               {selectedInstance ? (
