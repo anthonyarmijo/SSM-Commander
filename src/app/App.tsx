@@ -644,17 +644,6 @@ export function App() {
     hasInstancesNoticeError ? "notice--error" : "",
     hasInstancesNoticeWarning ? "notice--warning" : "",
   ].filter(Boolean).join(" ");
-  const environmentReadinessState = environment?.status === "ready" ? "good" : "warn";
-  const activeProfileReadinessState =
-    activeProfileState?.authStatus === "valid"
-      ? "good"
-      : activeProfileState?.authStatus === "expired"
-        ? "warn"
-        : activeProfileState?.authStatus === "error"
-          ? "bad"
-          : "neutral";
-  const instancesReadinessState = instances.length > 0 ? "info" : "neutral";
-  const sessionsReadinessState = sessions.length > 0 ? "info" : "neutral";
   const canConnectToInstance = Boolean(
     activeProfileReady && selectedInstance?.state === "running" && selectedInstance?.ssmStatus === "ready",
   );
@@ -2314,10 +2303,28 @@ export function App() {
 
         {activeView === "initialize" && (
           <section className="view view--initialize" aria-labelledby="initialize-title">
-            <header className="topbar">
+            <header className="topbar initialize-topbar">
               <div>
                 <p className="eyebrow">Initialize</p>
                 <h2 id="initialize-title">Profiles and environment</h2>
+              </div>
+              <div className="initialize-topbar__summary" aria-label="Workspace readiness">
+                <span>
+                  <small>Environment</small>
+                  <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
+                </span>
+                <span>
+                  <small>Active profile</small>
+                  <strong>{activeProfile || "None"}</strong>
+                </span>
+                <span>
+                  <small>Instances</small>
+                  <strong>{instances.length}</strong>
+                </span>
+                <span>
+                  <small>Sessions</small>
+                  <strong>{sessions.length}</strong>
+                </span>
               </div>
             </header>
 
@@ -2333,14 +2340,17 @@ export function App() {
               </div>
             )}
 
-            <section className="panel environment-panel environment-panel--initialize">
-              <div className="section-heading">
-                <h2>Environment</h2>
+            <section className="panel environment-panel environment-panel--initialize" aria-label="Local connection tools">
+              <div className="environment-panel__header">
+                <div>
+                  <p className="eyebrow">Local tools</p>
+                  <h2>Connection readiness</h2>
+                  <p>Tools required to discover instances and open SSM sessions.</p>
+                </div>
                 <button className="button-secondary environment-panel__check-button" onClick={() => void checkEnvironment()} type="button">
-                  Check
+                  Refresh
                 </button>
               </div>
-              <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
               <div className="check-list">
                 {environment?.checks.map((check) => {
                   const detail = formatDependencyDetail(check);
@@ -2644,24 +2654,6 @@ export function App() {
               )}
             </section>
 
-            <section className="panel readiness-panel" aria-label="Readiness summary">
-              <div className={`readiness-item readiness-item--${environmentReadinessState}`}>
-                <span>Environment</span>
-                <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
-              </div>
-              <div className={`readiness-item readiness-item--${activeProfileReadinessState}`}>
-                <span>Active profile</span>
-                <strong className="readiness-item__value readiness-item__value--profile">{activeProfile || "None"}</strong>
-              </div>
-              <div className={`readiness-item readiness-item--${instancesReadinessState}`}>
-                <span>Instances</span>
-                <strong>{instances.length}</strong>
-              </div>
-              <div className={`readiness-item readiness-item--${sessionsReadinessState}`}>
-                <span>SSM Activity</span>
-                <strong>{sessions.length}</strong>
-              </div>
-            </section>
           </section>
         )}
 

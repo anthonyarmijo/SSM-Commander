@@ -17,11 +17,8 @@ const CONSOLE_TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const CONSOLE_TUNNEL_SETTLE_DELAY: Duration = Duration::from_millis(1_200);
 
 #[tauri::command]
-pub fn check_environment(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<EnvironmentState, String> {
-    let environment = dependencies::check_environment(&app);
+pub fn check_environment(state: State<'_, AppState>) -> Result<EnvironmentState, String> {
+    let environment = dependencies::check_environment();
     match environment.status {
         crate::models::EnvironmentStatus::Ready => {
             state
