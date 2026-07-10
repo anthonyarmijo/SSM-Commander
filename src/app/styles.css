@@ -39,6 +39,16 @@
   --retained-selection-text: #1d1d1f;
   --link: #007aff;
   --glass-shadow: 0 18px 44px rgba(0, 0, 0, 0.12);
+  --home-bg: #f4f7fb;
+  --home-glow: #dce8fb;
+  --home-grid: rgba(44, 91, 155, 0.045);
+  --home-ink: #202735;
+  --home-muted: #6b7688;
+  --home-cloud: #536176;
+  --home-link: #b9c9e4;
+  --home-spark: #91a0b6;
+  --home-accent: #2563eb;
+  --home-caret: #718097;
 }
 
 [data-theme="dark"] {
@@ -67,6 +77,16 @@
   --retained-selection-text: #f0f3f7;
   --link: #62a5ff;
   --glass-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
+  --home-bg: #0c0e15;
+  --home-glow: #151a2e;
+  --home-grid: rgba(91, 141, 239, 0.035);
+  --home-ink: #e8ecf3;
+  --home-muted: #9aa3b4;
+  --home-cloud: #d5dae4;
+  --home-link: #2c3346;
+  --home-spark: #4c5568;
+  --home-accent: #5b8def;
+  --home-caret: #9aa3b4;
 }
 
 [data-design-variant="cool-ops"] {
@@ -4707,14 +4727,19 @@ a,
 
 /* Living cloud home */
 .view--home-brand {
-  background: #0c0e15;
+  background: var(--home-bg);
   padding: 0;
 }
 
 .home-splash {
   align-content: center;
-  background: radial-gradient(ellipse 58% 46% at 50% 38%, #151a2e 0%, rgba(12, 14, 21, 0) 72%);
-  color: #e8ecf3;
+  background:
+    linear-gradient(var(--home-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--home-grid) 1px, transparent 1px),
+    radial-gradient(ellipse 58% 46% at 50% 38%, var(--home-glow) 0%, transparent 72%),
+    var(--home-bg);
+  background-size: 48px 48px, 48px 48px, auto, auto;
+  color: var(--home-ink);
   display: grid;
   gap: 24px;
   justify-items: center;
@@ -4737,7 +4762,7 @@ a,
 
 .living-cloud__mascot {
   animation: living-cloud-bob 5s ease-in-out infinite;
-  color: #d5dae4;
+  color: var(--home-cloud);
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 14px;
   font-variant-ligatures: none;
@@ -4751,7 +4776,7 @@ a,
 
 .living-cloud__link {
   align-items: center;
-  color: #2c3346;
+  color: var(--home-link);
   display: flex;
   flex-direction: column;
   font-size: 13px;
@@ -4761,7 +4786,7 @@ a,
 
 .living-cloud__packet {
   animation: living-cloud-pulse 2.4s linear infinite;
-  color: #5b8def;
+  color: var(--home-accent);
 }
 
 .living-cloud__packet--two { animation-delay: .4s; }
@@ -4769,13 +4794,13 @@ a,
 .living-cloud__packet--four { animation-delay: 1.2s; }
 
 .living-cloud__prompt {
-  color: #e8ecf3;
+  color: var(--home-ink);
   font: 700 22px/1 var(--font-mono);
 }
 
 .living-cloud__prompt span {
   animation: living-cloud-blink 1s steps(1) infinite;
-  background: #9aa3b4;
+  background: var(--home-caret);
   display: inline-block;
   height: 20px;
   margin-left: 3px;
@@ -4785,7 +4810,7 @@ a,
 
 .living-cloud__spark {
   animation: living-cloud-twinkle 3.8s ease-in-out infinite;
-  color: #4c5568;
+  color: var(--home-spark);
   font-size: 15px;
   position: absolute;
 }
@@ -4796,13 +4821,13 @@ a,
 .living-cloud__spark--four { animation-delay: .6s; bottom: 27%; right: 23%; }
 
 .home-splash__brand {
-  color: #e8ecf3;
+  color: var(--home-ink);
   text-align: center;
   transform: translateY(-24px);
 }
 
 .home-splash__brand h2 {
-  color: #e8ecf3;
+  color: var(--home-ink);
   font-family: var(--font-sans);
   font-size: clamp(44px, 5vw, 68px);
   font-weight: 750;
@@ -4811,10 +4836,10 @@ a,
   margin: 0;
 }
 
-.home-splash__brand h2 > span { color: #5b8def; }
+.home-splash__brand h2 > span { color: var(--home-accent); }
 
 .home-splash__brand p {
-  color: #9aa3b4;
+  color: var(--home-muted);
   font: 600 16px/1.5 var(--font-mono);
   letter-spacing: .04em;
   margin: 18px 0 0;
