@@ -143,10 +143,10 @@ Additional setup and troubleshooting notes live in:
 - [docs/public-release-checklist.md](docs/public-release-checklist.md)
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 
-Known native RDP limitation: the initial macOS implementation fits a fixed
-`1280x720` remote desktop into the console pane. Smart-card use inside an
-established desktop is supported; smart-card RDP/NLA login is not yet a
-supported launch mode.
+Native macOS RDP selects its initial remote-desktop dimensions from the visible
+console pane, then smart-scales the desktop as the app window changes. Smart-card
+use inside an established desktop is supported; smart-card RDP/NLA login is not
+yet a supported launch mode.
 
 ## License
 

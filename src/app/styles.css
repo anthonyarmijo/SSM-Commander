@@ -2436,7 +2436,6 @@ tr.selected--primary td {
   width: 100%;
 }
 
-.native-freerdp-console__hint,
 .native-freerdp-console__status {
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   border: 1px solid var(--line);

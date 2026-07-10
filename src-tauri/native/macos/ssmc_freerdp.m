@@ -105,11 +105,12 @@ SsmFreerdpSession *ssm_freerdp_create(void *parent_view, const char *host, uint1
 		return NULL;
 	}
 
-	const char *arguments[7] = { "ssm-commander", NULL, "/cert:ignore", NULL, NULL, NULL, NULL };
+	const char *arguments[8] = { "ssm-commander", NULL, "/cert:ignore", "/smart-sizing", NULL,
+	                             NULL, NULL, NULL };
 	char destination[320];
 	snprintf(destination, sizeof(destination), "/v:%s:%u", host, (unsigned int)port);
 	arguments[1] = destination;
-	int argc = 3;
+	int argc = 4;
 	const char *security = security_argument(security_mode);
 	if (security)
 		arguments[argc++] = security;
@@ -159,6 +160,10 @@ void ssm_freerdp_set_frame(SsmFreerdpSession *session, double x, double y, doubl
 	NSRect parent_bounds = [session->parent bounds];
 	double native_y = NSHeight(parent_bounds) - y - height;
 	[session->view setFrame:NSMakeRect(x, native_y, MAX(width, 1), MAX(height, 1))];
+	mfContext *mac_context = (mfContext *)session->context;
+	mac_context->client_width = (UINT32)MAX(width, 1);
+	mac_context->client_height = (UINT32)MAX(height, 1);
+	[session->view setNeedsDisplay:YES];
 	[session->view setHidden:!visible];
 	if (visible)
 		[session->parent addSubview:session->view positioned:NSWindowAbove relativeTo:nil];

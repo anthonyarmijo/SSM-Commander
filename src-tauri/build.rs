@@ -32,6 +32,23 @@ fn build_macos_freerdp() {
     if !source.join("client/Mac/MRDPView.m").exists() {
         panic!("the FreeRDP source submodule is missing; run `git submodule update --init --recursive`");
     }
+    let mrdp_view = source.join("client/Mac/MRDPView.m");
+    let original_mrdp_view = std::fs::read_to_string(&mrdp_view)
+        .expect("could not read FreeRDP's macOS MRDPView source");
+    let patched_mrdp_view = original_mrdp_view.replace(
+        "[event locationInWindow]",
+        "[self convertPoint:[event locationInWindow] fromView:nil]",
+    );
+    if patched_mrdp_view == original_mrdp_view {
+        panic!(
+            "the pinned FreeRDP MRDPView source no longer has the expected mouse coordinate calls"
+        );
+    }
+    let patched_mrdp_view_path =
+        std::path::PathBuf::from(std::env::var("OUT_DIR").expect("Cargo did not provide OUT_DIR"))
+            .join("SSMCommanderMRDPView.m");
+    std::fs::write(&patched_mrdp_view_path, patched_mrdp_view)
+        .expect("could not write patched FreeRDP MRDPView source");
 
     println!("cargo:rerun-if-env-changed=SSM_COMMANDER_FREERDP_PREFIX");
     println!("cargo:rerun-if-changed=native/macos/ssmc_freerdp.m");
@@ -71,7 +88,6 @@ fn build_macos_freerdp() {
         "native/macos/ssmc_freerdp.m",
         "vendor/freerdp/client/Mac/mf_client.m",
         "vendor/freerdp/client/Mac/MRDPCursor.m",
-        "vendor/freerdp/client/Mac/MRDPView.m",
         "vendor/freerdp/client/Mac/Keyboard.m",
         "vendor/freerdp/client/Mac/Clipboard.m",
         "vendor/freerdp/client/Mac/CertificateDialog.m",
@@ -79,6 +95,7 @@ fn build_macos_freerdp() {
     ] {
         mac.file(file);
     }
+    mac.file(patched_mrdp_view_path);
     mac.compile("ssmc_freerdp_macos");
 
     println!(

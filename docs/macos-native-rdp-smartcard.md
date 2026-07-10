@@ -44,14 +44,21 @@ a card is inserted or that the target Windows policy permits redirection.
   disconnection and its FreeRDP error code instead of leaving a blank native
   view. Check the credentials, Windows RDP service, and the SSM tunnel before
   retrying.
+- The initial remote resolution is derived from the available console pane, not
+  a fixed `16:9` mode. The native view smart-scales as the app window changes;
+  reopen the console when a different negotiated Windows desktop resolution is
+  required.
 - Smart-card authentication during RDP/NLA logon is a separate flow and is not
   yet exposed as a supported SSM Commander login mode. Validate that scenario
   separately before relying on it.
 - The first implementation is macOS-first. Windows continues to use the
   Guacamole renderer, with the system RDP client as its external fallback.
 - The native view uses the upstream FreeRDP 3.28 source submodule at
-  `src-tauri/vendor/freerdp`; update and test it deliberately rather than
-  applying unreviewed patches to FreeRDP.
+  `src-tauri/vendor/freerdp`; update and test it deliberately. During the
+  macOS build, SSM Commander creates a local copy of `MRDPView.m` that converts
+  mouse positions from window to view coordinates. This small compatibility
+  adjustment keeps pointer input accurate when the RDP view starts beside the
+  app sidebar; it does not modify the checked-out upstream submodule.
 - For a sandboxed/macOS-App-Store distribution, evaluate Apple’s Smart Card
   entitlement (`com.apple.security.smartcard`) during signing work. The current
   direct-distribution build is not presented as App-Store sandboxed.

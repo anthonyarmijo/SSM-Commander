@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen } from "@tauri-apps/api/event";
@@ -58,7 +59,7 @@ import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacem
 import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
 import { buildConsoleSessionRequest } from "./consoleSessionRequest";
 import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormState } from "./credentialForm";
-import { DEFAULT_RDP_DISPLAY_SIZE, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
+import { DEFAULT_RDP_DISPLAY_SIZE, getBrowserRdpConsolePaneSize, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
 import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
@@ -503,6 +504,7 @@ export function App() {
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<string[]>([]);
   const [selectionAnchorId, setSelectionAnchorId] = useState("");
   const [isInstancesLoading, setIsInstancesLoading] = useState(false);
+  const [isConsoleOpening, setIsConsoleOpening] = useState(false);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [consoleSessions, setConsoleSessions] = useState<ConsoleSessionRecord[]>([]);
   const [activeConsoleSessionId, setActiveConsoleSessionId] = useState("");
@@ -1645,46 +1647,59 @@ export function App() {
   ) {
     const trimmedInstanceId = instanceId.trim();
     if (!activeProfile || !activeProfileRegion || !trimmedInstanceId) return;
-    const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
-      request: buildConsoleSessionRequest({
-        kind,
-        profile: activeProfile,
-        region: activeProfileRegion,
-        instanceId: trimmedInstanceId,
-        localPort: kind === "shell"
-          ? null
-          : localPortOverride === undefined
-            ? (customLocalPort ? Number(customLocalPort) : null)
-            : localPortOverride,
-        sshUser,
-        sshPassword,
-        sshKeyPath,
-        sshPrivateKeyContent,
-        sshCredentialId: selectedSshCredentialId,
-        rdpUsername,
-        rdpDomain,
-        rdpPassword,
-        rdpCredentialId: selectedRdpCredentialId,
-        rdpSecurityMode,
-        rdpShareSmartcard,
-        terminalCols: 100,
-        terminalRows: 30,
-        width: DEFAULT_RDP_DISPLAY_SIZE.width,
-        height: DEFAULT_RDP_DISPLAY_SIZE.height,
-      }),
+    const rdpDisplaySize = kind === "rdp"
+      ? getBrowserRdpConsolePaneSize(sidebarWidth)
+      : DEFAULT_RDP_DISPLAY_SIZE;
+    // Force the state change into the WebView before native startup blocks
+    // briefly while it establishes the SSM tunnel and RDP link.
+    flushSync(() => setIsConsoleOpening(true));
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
     });
-    setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
-    setActiveConsoleSessionId(session.id);
-    setActiveView("console");
-    setIsConsoleDialogOpen(false);
-    setRdpPassword("");
-    setNotice(
-      session.status === "failed"
-        ? session.message || "Console session could not start."
-        : `${consoleKindLabel(kind)} console opened for ${trimmedInstanceId}.`,
-    );
-    await loadSessions();
-    await loadDiagnostics();
+    try {
+      const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
+        request: buildConsoleSessionRequest({
+          kind,
+          profile: activeProfile,
+          region: activeProfileRegion,
+          instanceId: trimmedInstanceId,
+          localPort: kind === "shell"
+            ? null
+            : localPortOverride === undefined
+              ? (customLocalPort ? Number(customLocalPort) : null)
+              : localPortOverride,
+          sshUser,
+          sshPassword,
+          sshKeyPath,
+          sshPrivateKeyContent,
+          sshCredentialId: selectedSshCredentialId,
+          rdpUsername,
+          rdpDomain,
+          rdpPassword,
+          rdpCredentialId: selectedRdpCredentialId,
+          rdpSecurityMode,
+          rdpShareSmartcard,
+          terminalCols: 100,
+          terminalRows: 30,
+          width: rdpDisplaySize.width,
+          height: rdpDisplaySize.height,
+        }),
+      });
+      setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
+      setActiveConsoleSessionId(session.id);
+      setActiveView("console");
+      setIsConsoleDialogOpen(false);
+      setRdpPassword("");
+      setNotice(
+        session.status === "failed"
+          ? session.message || "Console session could not start."
+          : `${consoleKindLabel(kind)} console opened for ${trimmedInstanceId}.`,
+      );
+      await loadSessions();
+      await loadDiagnostics();
+    } finally {
+      setIsConsoleOpening(false);
+    }
   }
 
   async function stopConsoleSession(sessionId: string, options: { manual?: boolean } = {}) {
@@ -3115,12 +3130,12 @@ export function App() {
                         <div className="action-stack connection-actions__buttons">
                           <button
                             className="button-primary"
-                            disabled={!canConnectToInstance}
+                            disabled={!canConnectToInstance || isConsoleOpening}
                             onClick={() => void startConsoleSession(instanceConnectionKind, selectedInstance.instanceId, getInstanceActionsLocalPort())}
                             title={connectionDisabledTitle}
                             type="button"
                           >
-                            {consoleOpenLabel(instanceConnectionKind)}
+                            {isConsoleOpening ? <LoadingIndicator label="Opening RDP…" /> : consoleOpenLabel(instanceConnectionKind)}
                           </button>
                           <button disabled={!canConnectToInstance} onClick={() => openTunnelDialog(selectedInstance.instanceId)} title={connectionDisabledTitle} type="button">
                             Start Tunnel
@@ -3384,12 +3399,12 @@ export function App() {
                     <button className="button-ghost" onClick={() => setIsConsoleDialogOpen(false)} type="button">Cancel</button>
                     <button
                       className="button-primary"
-                      disabled={!canOpenConsoleDialog}
+                      disabled={!canOpenConsoleDialog || isConsoleOpening}
                       onClick={() => void startConsoleSession(consoleSessionKind, consoleInstanceId)}
                       title={consoleDialogDisabledTitle}
                       type="button"
                     >
-                      {consoleOpenLabel(consoleSessionKind)}
+                      {isConsoleOpening ? <LoadingIndicator label="Opening RDP…" /> : consoleOpenLabel(consoleSessionKind)}
                     </button>
                   </div>
                 </div>
@@ -3707,7 +3722,6 @@ function NativeFreerdpConsole({ isVisible, session }: { isVisible: boolean; sess
   return (
     <div className="native-freerdp-console">
       <div className="native-freerdp-console__display" ref={displayRef} />
-      {!error && <div className="native-freerdp-console__hint">Native FreeRDP — click the display to focus it.</div>}
       {error && <div className="native-freerdp-console__status">{error}</div>}
     </div>
   );
