@@ -16,6 +16,7 @@ SSM Commander is a Tauri desktop app for browsing EC2 instances and launching AW
 - Save optional SSH and RDP connection details in an encrypted local credential vault.
 - Set default SSH/RDP credentials and apply them from the Instances inspector without exposing saved secrets to persisted preferences.
 - Configure RDP domain and security mode details for embedded console launches.
+- On macOS, use an embedded native FreeRDP view and optionally redirect a local PIV/CAC smart card into the Windows VM.
 - Surface environment checks and local diagnostics in-app.
 
 ## Prerequisites
@@ -36,8 +37,8 @@ also search standard Homebrew and system tool locations before falling back to
 Recommended, depending on your workflow:
 
 - OpenSSH
-- Docker for the one-command local dev workflow, a native `guacd` binary for manual embedded RDP development, or the bundled `guacd` sidecar in packaged macOS builds
-- FreeRDP on macOS or the native Remote Desktop client on Windows for external RDP fallback
+- FreeRDP 3 on macOS for the native embedded RDP renderer
+- Docker/`guacd` for the legacy Windows embedded-RDP renderer and its development workflow
 
 Development builds also require Node.js, npm, and Rust.
 
@@ -55,7 +56,9 @@ The app does not replace IAM, AWS SSO, or Session Manager setup. It expects prof
 
 ## v1.0 Release
 
-Version 1.0.0 launches the refreshed resource browser, embedded console tabs, encrypted local SSH/RDP credential vault, stronger credential handling, Docker-backed local `guacd` workflow, and public-release security checks.
+Version 1.0.0 launches the refreshed resource browser, embedded console tabs,
+encrypted local SSH/RDP credential vault, native macOS FreeRDP, and
+public-release security checks.
 
 ## Development
 
@@ -66,9 +69,11 @@ npm install
 npm start
 ```
 
-`npm start` starts the local Guacamole bridge with Docker, waits for it to be
-ready, launches Tauri dev mode, and stops the bridge when you quit. Docker
-Desktop must be running before you start the app.
+On macOS, `npm start` launches Tauri directly and does not require Docker or a
+running `guacd` process. On Windows, it starts the local Guacamole bridge for
+the embedded-RDP renderer, waits for it to be ready, launches Tauri dev mode,
+and stops the bridge when you quit. Set `SSM_COMMANDER_ENABLE_GUACD_DEV=1` on
+macOS only when you intentionally need the legacy bridge for debugging.
 
 Advanced/manual alternatives:
 
@@ -79,21 +84,20 @@ npm run dev        # frontend-only Vite server
 
 ## macOS DMG Builds
 
-Apple Silicon DMG builds bundle a native Apache Guacamole `guacd` sidecar for
-embedded RDP. The generated sidecar artifacts are intentionally ignored by git;
-stage them before release packaging. The staging script reuses valid local
-artifacts on later runs; set `GUACD_FORCE_REBUILD=1` to rebuild the sidecar from
-source.
+Apple Silicon RDP uses the upstream FreeRDP Mac view embedded natively in the
+console workspace. The source is pinned as the `src-tauri/vendor/freerdp`
+submodule and builds against FreeRDP 3 installed through Homebrew. The bundle
+workflow stages and rewrites the FreeRDP/WinPR dylib closure automatically.
 
 ```sh
-npm run stage:guacd:macos
+npm run stage:freerdp:macos  # optional standalone staging check after a release build
 npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
 ```
 
-The packaged app starts the bundled sidecar on a private loopback port and stops
-that owned process on app shutdown. Development builds can still use an existing
-bridge on `127.0.0.1:4822` when no bundled sidecar is available. FreeRDP remains
-only the external RDP fallback.
+For macOS, the app starts FreeRDP directly against the SSM tunnel and does not
+need a `guacd` listener. Windows continues to use the Guacamole bridge. See
+[native macOS RDP and smart-card redirection](docs/macos-native-rdp-smartcard.md)
+for card setup, architecture, and current limitations.
 
 Signing and notarization are configured through environment variables instead
 of committed values. Use `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, and
@@ -128,6 +132,7 @@ cargo check
 - Saved SSH and RDP credentials live only in the encrypted local credential vault after you unlock it with a master passphrase.
 - Saved credential secrets are resolved in the Tauri backend for console launches instead of being copied into persisted preferences.
 - Manually entered embedded SSH and RDP session credentials are kept in memory and are not persisted to preferences.
+- PIV/CAC redirection is opt-in per RDP launch and uses the RDP PC/SC smart-card channel; no raw USB device is exposed to the web UI.
 - Public releases should be scanned with Gitleaks before publishing.
 
 ## Troubleshooting
@@ -138,9 +143,10 @@ Additional setup and troubleshooting notes live in:
 - [docs/public-release-checklist.md](docs/public-release-checklist.md)
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 
-Known embedded RDP limitation: the current stable path fits a fixed `1280x720`
-remote desktop into the console pane. Small top/bottom black bars can still
-appear until dynamic VM resizing is made reliable.
+Known native RDP limitation: the initial macOS implementation fits a fixed
+`1280x720` remote desktop into the console pane. Smart-card use inside an
+established desktop is supported; smart-card RDP/NLA login is not yet a
+supported launch mode.
 
 ## License
 

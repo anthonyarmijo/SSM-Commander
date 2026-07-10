@@ -2,9 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "targets": ["dmg"],
-    "externalBin": ["binaries/guacd"],
     "resources": {
-      "resources/macos/lib/*": "lib/"
+      "resources/macos/lib/*": "lib/",
+      "vendor/freerdp/LICENSE": "licenses/FreeRDP-LICENSE"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

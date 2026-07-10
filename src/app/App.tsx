@@ -521,6 +521,9 @@ export function App() {
   const [rdpDomain, setRdpDomain] = useState("");
   const [rdpPassword, setRdpPassword] = useState("");
   const [rdpSecurityMode, setRdpSecurityMode] = useState<RdpSecurityMode>("auto");
+  const [rdpShareSmartcard, setRdpShareSmartcard] = useState(false);
+  const supportsNativeRdpSmartcard = isTauriRuntime() && /Macintosh|Mac OS X/.test(navigator.userAgent);
+  const [nativeSmartcardReaderCount, setNativeSmartcardReaderCount] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [logsCopyStatus, setLogsCopyStatus] = useState("");
   const [query, setQuery] = useState("");
@@ -615,6 +618,11 @@ export function App() {
     : null;
   const showInstancesRefreshing = isInstancesLoading && instances.length > 0;
   const showInitialInstancesLoader = isInstancesLoading && instances.length === 0;
+  const nativeSmartcardPreflightMessage = nativeSmartcardReaderCount === 0
+    ? "No macOS PC/SC smart-card reader is currently detected."
+    : nativeSmartcardReaderCount !== null && nativeSmartcardReaderCount < 0
+      ? "macOS SmartCard Services is unavailable."
+      : "";
   const instanceBrowserMaxWidth = getMaxInstanceBrowserWidth(sidebarWidth);
   const appShellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -1658,6 +1666,7 @@ export function App() {
         rdpPassword,
         rdpCredentialId: selectedRdpCredentialId,
         rdpSecurityMode,
+        rdpShareSmartcard,
         terminalCols: 100,
         terminalRows: 30,
         width: DEFAULT_RDP_DISPLAY_SIZE.width,
@@ -1858,6 +1867,21 @@ export function App() {
   useEffect(() => {
     activeConsoleSessionIdRef.current = activeConsoleSessionId;
   }, [activeConsoleSessionId]);
+
+  useEffect(() => {
+    if (!supportsNativeRdpSmartcard) return;
+    let cancelled = false;
+    void invokeCommand<{ readerCount: number }>("native_rdp_smartcard_status")
+      .then(({ readerCount }) => {
+        if (!cancelled) setNativeSmartcardReaderCount(readerCount);
+      })
+      .catch(() => {
+        if (!cancelled) setNativeSmartcardReaderCount(-1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supportsNativeRdpSmartcard]);
 
   useEffect(() => {
     if (instanceSort && !instanceTableVisibleColumns.includes(instanceSort.columnId)) {
@@ -3042,7 +3066,7 @@ export function App() {
                             <div className="connection-actions__fields connection-actions__fields--rdp">
                               <label>
                                 RDP username
-                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required for native macOS RDP" : "Optional"} value={rdpUsername} />
                               </label>
                               <label>
                                 RDP domain
@@ -3050,7 +3074,7 @@ export function App() {
                               </label>
                               <label>
                                 RDP password
-                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required; kept in memory only" : "Kept in memory only"} type="password" value={rdpPassword} />
                               </label>
                               <label>
                                 RDP security
@@ -3060,6 +3084,15 @@ export function App() {
                                   ))}
                                 </select>
                               </label>
+                              {supportsNativeRdpSmartcard && (
+                                <label className="instance-port-toggle">
+                                  <input checked={rdpShareSmartcard} onChange={(event) => setRdpShareSmartcard(event.target.checked)} type="checkbox" />
+                                  <span>
+                                    Share macOS PIV/CAC smart card with this RDP session
+                                    {nativeSmartcardPreflightMessage && <small>{nativeSmartcardPreflightMessage}</small>}
+                                  </span>
+                                </label>
+                              )}
                             </div>
                           )}
 
@@ -3310,7 +3343,7 @@ export function App() {
                     <>
                       <label>
                         RDP username
-                        <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required for native macOS RDP" : "Optional"} value={rdpUsername} />
                       </label>
                       <label>
                         RDP domain
@@ -3318,7 +3351,7 @@ export function App() {
                       </label>
                       <label>
                         RDP password
-                        <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required; kept in memory only" : "Kept in memory only"} type="password" value={rdpPassword} />
                       </label>
                       <label>
                         RDP security
@@ -3328,6 +3361,15 @@ export function App() {
                           ))}
                         </select>
                       </label>
+                      {supportsNativeRdpSmartcard && (
+                        <label className="instance-port-toggle">
+                          <input checked={rdpShareSmartcard} onChange={(event) => setRdpShareSmartcard(event.target.checked)} type="checkbox" />
+                          <span>
+                            Share macOS PIV/CAC smart card with this RDP session
+                            {nativeSmartcardPreflightMessage && <small>{nativeSmartcardPreflightMessage}</small>}
+                          </span>
+                        </label>
+                      )}
                     </>
                   ) : (
                     null
@@ -3358,6 +3400,8 @@ export function App() {
               <section className="console-workspace" role="tabpanel">
                 {activeConsoleSession.renderer === "xterm" ? (
                   <XtermConsole session={activeConsoleSession} />
+                ) : activeConsoleSession.renderer === "nativeFreerdp" ? (
+                  <NativeFreerdpConsole isVisible={activeView === "console"} session={activeConsoleSession} />
                 ) : (
                   <GuacamoleConsole isVisible={activeView === "console"} session={activeConsoleSession} />
                 )}
@@ -3579,6 +3623,94 @@ function sampleGuacamoleDisplay(guacDisplay: {
   } catch (error) {
     return `sampleError=${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+function NativeFreerdpConsole({ isVisible, session }: { isVisible: boolean; session: ConsoleSessionRecord }) {
+  const displayRef = useRef<HTMLDivElement | null>(null);
+  const connectionEndedRef = useRef(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const display = displayRef.current;
+    if (!display) return;
+    connectionEndedRef.current = false;
+    let cancelled = false;
+    let animationFrame = 0;
+    let statusTimer = 0;
+    const mount = () => {
+      animationFrame = 0;
+      if (cancelled || connectionEndedRef.current) return;
+      const rect = display.getBoundingClientRect();
+      const visible = isVisible && rect.width > 1 && rect.height > 1;
+      void invokeCommand("mount_native_rdp", {
+        sessionId: session.id,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        visible,
+      }).then(() => {
+        if (!cancelled) setError("");
+      }).catch((mountError) => {
+        if (!cancelled) setError(mountError instanceof Error ? mountError.message : String(mountError));
+      });
+    };
+    const scheduleMount = () => {
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(mount);
+    };
+    const pollConnection = () => {
+      if (cancelled || !isVisible || connectionEndedRef.current) return;
+      void invokeCommand<{
+        state: "connecting" | "connected" | "disconnected";
+        error?: string;
+      }>("native_rdp_connection_status", {
+        sessionId: session.id,
+      }).then(({ state, error: nativeError }) => {
+        if (cancelled || state !== "disconnected") return;
+        connectionEndedRef.current = true;
+        const detail = nativeError ? ` FreeRDP reported: ${nativeError}.` : "";
+        setError(`Native RDP disconnected. Check the RDP credentials, the instance’s RDP service, and the SSM tunnel.${detail}`);
+        void invokeCommand("mount_native_rdp", {
+          sessionId: session.id,
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          visible: false,
+        });
+      }).catch(() => {
+        // A just-created view may not have been stored before the first poll.
+      });
+    };
+    const observer = new ResizeObserver(scheduleMount);
+    observer.observe(display);
+    window.addEventListener("resize", scheduleMount);
+    scheduleMount();
+    statusTimer = window.setInterval(pollConnection, 1_000);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleMount);
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      if (statusTimer) window.clearInterval(statusTimer);
+      void invokeCommand("mount_native_rdp", {
+        sessionId: session.id,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        visible: false,
+      });
+    };
+  }, [isVisible, session.id]);
+
+  return (
+    <div className="native-freerdp-console">
+      <div className="native-freerdp-console__display" ref={displayRef} />
+      {!error && <div className="native-freerdp-console__hint">Native FreeRDP — click the display to focus it.</div>}
+      {error && <div className="native-freerdp-console__status">{error}</div>}
+    </div>
+  );
 }
 
 function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session: ConsoleSessionRecord }) {

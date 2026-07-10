@@ -16,6 +16,7 @@ export interface BuildConsoleSessionRequestInput {
   rdpPassword: string;
   rdpCredentialId: string;
   rdpSecurityMode: RdpSecurityMode;
+  rdpShareSmartcard?: boolean;
   terminalCols: number;
   terminalRows: number;
   width: number;
@@ -46,6 +47,7 @@ export function buildConsoleSessionRequest(input: BuildConsoleSessionRequestInpu
     rdpPassword: input.kind === "rdp" ? input.rdpPassword || null : null,
     rdpCredentialId: input.kind === "rdp" ? input.rdpCredentialId || null : null,
     rdpSecurityMode: input.kind === "rdp" ? input.rdpSecurityMode : null,
+    rdpShareSmartcard: input.kind === "rdp" ? Boolean(input.rdpShareSmartcard) : false,
     terminalCols: input.terminalCols,
     terminalRows: input.terminalRows,
     width: input.width,

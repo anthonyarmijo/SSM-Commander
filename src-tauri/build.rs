@@ -6,15 +6,107 @@ const GUACD_PLACEHOLDER_MARKER: &str = "SSM_COMMANDER_GENERATED_GUACD_PLACEHOLDE
 const GUACD_LIB_PLACEHOLDER: &str = "SSM_COMMANDER_GENERATED_GUACD_LIB_PLACEHOLDER";
 
 fn main() {
+    build_macos_freerdp();
     prepare_debug_guacd_placeholder();
     tauri_build::build()
+}
+
+fn build_macos_freerdp() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+
+    let prefix = std::env::var("SSM_COMMANDER_FREERDP_PREFIX")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            ["/opt/homebrew/opt/freerdp", "/usr/local/opt/freerdp"]
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .find(|path| path.join("include/freerdp3/freerdp/freerdp.h").exists())
+        })
+        .unwrap_or_else(|| {
+            panic!("embedded macOS RDP requires FreeRDP 3 headers; install it with `brew install freerdp` or set SSM_COMMANDER_FREERDP_PREFIX")
+        });
+    let source = std::path::Path::new("vendor/freerdp");
+    if !source.join("client/Mac/MRDPView.m").exists() {
+        panic!("the FreeRDP source submodule is missing; run `git submodule update --init --recursive`");
+    }
+
+    println!("cargo:rerun-if-env-changed=SSM_COMMANDER_FREERDP_PREFIX");
+    println!("cargo:rerun-if-changed=native/macos/ssmc_freerdp.m");
+    println!("cargo:rerun-if-changed=native/macos/ssmc_freerdp.h");
+    for file in [
+        "client/common/client.c",
+        "client/Mac/mf_client.m",
+        "client/Mac/MRDPCursor.m",
+        "client/Mac/MRDPView.m",
+        "client/Mac/Keyboard.m",
+        "client/Mac/Clipboard.m",
+        "client/Mac/CertificateDialog.m",
+        "client/Mac/PasswordDialog.m",
+    ] {
+        println!("cargo:rerun-if-changed={}", source.join(file).display());
+    }
+
+    let include = |build: &mut cc::Build| {
+        build
+            .include(prefix.join("include/freerdp3"))
+            .include(prefix.join("include/winpr3"))
+            .include(source.join("client/Mac"))
+            .include(source.join("client/common"))
+            .flag("-mmacosx-version-min=12.0")
+            .flag("-Wno-deprecated-declarations");
+    };
+    let mut common = cc::Build::new();
+    include(&mut common);
+    common
+        .file(source.join("client/common/client.c"))
+        .compile("ssmc_freerdp_common");
+
+    let mut mac = cc::Build::new();
+    include(&mut mac);
+    mac.flag("-std=gnu2x").flag("-fno-objc-arc");
+    for file in [
+        "native/macos/ssmc_freerdp.m",
+        "vendor/freerdp/client/Mac/mf_client.m",
+        "vendor/freerdp/client/Mac/MRDPCursor.m",
+        "vendor/freerdp/client/Mac/MRDPView.m",
+        "vendor/freerdp/client/Mac/Keyboard.m",
+        "vendor/freerdp/client/Mac/Clipboard.m",
+        "vendor/freerdp/client/Mac/CertificateDialog.m",
+        "vendor/freerdp/client/Mac/PasswordDialog.m",
+    ] {
+        mac.file(file);
+    }
+    mac.compile("ssmc_freerdp_macos");
+
+    println!(
+        "cargo:rustc-link-search=native={}",
+        prefix.join("lib").display()
+    );
+    println!("cargo:rustc-link-lib=dylib=freerdp-client3");
+    println!("cargo:rustc-link-lib=dylib=freerdp3");
+    println!("cargo:rustc-link-lib=dylib=winpr3");
+    for framework in [
+        "AppKit",
+        "Cocoa",
+        "Foundation",
+        "CoreGraphics",
+        "IOKit",
+        "PCSC",
+    ] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
 
 fn prepare_debug_guacd_placeholder() {
     let target = std::env::var("TAURI_ENV_TARGET_TRIPLE")
         .or_else(|_| std::env::var("TARGET"))
         .unwrap_or_default();
-    if target != GUACD_TARGET_TRIPLE {
+    if target != GUACD_TARGET_TRIPLE
+        || std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+    {
         return;
     }
 
@@ -23,30 +115,6 @@ fn prepare_debug_guacd_placeholder() {
     let profile = std::env::var("PROFILE").unwrap_or_default();
 
     if profile == "release" {
-        if fs::read_to_string(&path)
-            .map(|contents| contents.contains(GUACD_PLACEHOLDER_MARKER))
-            .unwrap_or(false)
-        {
-            panic!(
-                "release macOS builds require a real guacd sidecar; run scripts/stage-guacd-macos.mjs before building the DMG"
-            );
-        }
-        let has_staged_dylib = fs::read_dir(&lib_dir)
-            .map(|entries| {
-                entries.filter_map(Result::ok).any(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .map(|extension| extension == "dylib")
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false);
-        if !has_staged_dylib {
-            panic!(
-                "release macOS builds require staged guacd dylibs; run scripts/stage-guacd-macos.mjs before building the DMG"
-            );
-        }
         return;
     }
 
