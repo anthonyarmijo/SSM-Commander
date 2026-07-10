@@ -17,9 +17,11 @@ export function isInitializationGatedView(view: ActiveView): boolean {
 export const ASCII_TERRARIUM = {
   cloud: [
     "       .-~~~~-.",
-    "    .-(  ^  ^  )-.",
-    "   (__    --    __)",
-    "      `-.____.-'",
+    "   .-~'        `~-.",
+    "  (    ^      ^    )",
+    " (       ----       )",
+    "  `-._          _.-'",
+    "      `~~~~~~~~'",
   ],
   server: [
     ".----------.",

@@ -609,7 +609,7 @@ code {
 .inspector-section h3,
 .empty-home-state h3 {
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .profile-card__header h3 {
@@ -1768,7 +1768,8 @@ code {
 .ascii-terrarium {
   color: color-mix(in srgb, var(--text-muted) 88%, var(--text));
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: clamp(11px, 1.35vw, 15px);
+  /* Keep the artwork legible and visually stable as the app window is resized. */
+  font-size: 15px;
   height: 310px;
   max-width: 100%;
   opacity: 0;
@@ -4646,9 +4647,6 @@ a,
     padding: 20px 14px;
   }
 
-  .ascii-terrarium {
-    height: 270px;
-  }
 }
 
 @media (max-width: 640px) {
@@ -4659,11 +4657,6 @@ a,
   .home-splash {
     min-height: 400px;
     padding-inline: 0;
-  }
-
-  .ascii-terrarium {
-    font-size: clamp(8px, 2vw, 10px);
-    height: 230px;
   }
 
   .ascii-terrarium__ground {
@@ -4695,10 +4688,6 @@ a,
     padding-block: 12px;
   }
 
-  .ascii-terrarium {
-    height: 250px;
-  }
-
   .home-splash__brand p {
     margin-top: 10px;
   }
@@ -4711,11 +4700,189 @@ a,
     padding-block: 6px;
   }
 
-  .ascii-terrarium {
-    height: 210px;
-  }
-
   .home-splash__brand p {
     margin-top: 7px;
+  }
+}
+
+/* Living cloud home */
+.view--home-brand {
+  background: #0c0e15;
+  padding: 0;
+}
+
+.home-splash {
+  align-content: center;
+  background: radial-gradient(ellipse 58% 46% at 50% 38%, #151a2e 0%, rgba(12, 14, 21, 0) 72%);
+  color: #e8ecf3;
+  display: grid;
+  gap: 24px;
+  justify-items: center;
+  min-height: 100vh;
+  overflow: hidden;
+  padding: 44px 24px;
+  position: relative;
+}
+
+.living-cloud {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  min-height: 300px;
+  position: relative;
+  transform: translateY(24px);
+  width: min(720px, 100%);
+}
+
+.living-cloud__mascot {
+  animation: living-cloud-bob 5s ease-in-out infinite;
+  color: #d5dae4;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+  font-variant-ligatures: none;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.3;
+  margin: 0;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.living-cloud__link {
+  align-items: center;
+  color: #2c3346;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.05;
+  margin: 8px 0 5px;
+}
+
+.living-cloud__packet {
+  animation: living-cloud-pulse 2.4s linear infinite;
+  color: #5b8def;
+}
+
+.living-cloud__packet--two { animation-delay: .4s; }
+.living-cloud__packet--three { animation-delay: .8s; }
+.living-cloud__packet--four { animation-delay: 1.2s; }
+
+.living-cloud__prompt {
+  color: #e8ecf3;
+  font: 700 22px/1 var(--font-mono);
+}
+
+.living-cloud__prompt span {
+  animation: living-cloud-blink 1s steps(1) infinite;
+  background: #9aa3b4;
+  display: inline-block;
+  height: 20px;
+  margin-left: 3px;
+  vertical-align: -3px;
+  width: 10px;
+}
+
+.living-cloud__spark {
+  animation: living-cloud-twinkle 3.8s ease-in-out infinite;
+  color: #4c5568;
+  font-size: 15px;
+  position: absolute;
+}
+
+.living-cloud__spark--one { left: 10%; top: 2%; }
+.living-cloud__spark--two { animation-delay: 1.1s; right: 4%; top: 29%; }
+.living-cloud__spark--three { animation-delay: 2s; bottom: 2%; left: 23%; }
+.living-cloud__spark--four { animation-delay: .6s; bottom: 27%; right: 23%; }
+
+.home-splash__brand {
+  color: #e8ecf3;
+  text-align: center;
+  transform: translateY(-24px);
+}
+
+.home-splash__brand h2 {
+  color: #e8ecf3;
+  font-family: var(--font-sans);
+  font-size: clamp(44px, 5vw, 68px);
+  font-weight: 750;
+  letter-spacing: -2.2px;
+  line-height: 1;
+  margin: 0;
+}
+
+.home-splash__brand h2 > span { color: #5b8def; }
+
+.home-splash__brand p {
+  color: #9aa3b4;
+  font: 600 16px/1.5 var(--font-mono);
+  letter-spacing: .04em;
+  margin: 18px 0 0;
+}
+
+@keyframes living-cloud-bob { 50% { transform: translateY(-7px); } }
+@keyframes living-cloud-pulse { 0%, 100% { opacity: .15; } 50% { opacity: 1; } }
+@keyframes living-cloud-blink { 50% { opacity: 0; } }
+@keyframes living-cloud-twinkle { 0%, 100% { opacity: .15; } 50% { opacity: .8; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .living-cloud__mascot,
+  .living-cloud__packet,
+  .living-cloud__prompt span,
+  .living-cloud__spark { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .living-cloud { min-height: 250px; }
+  .living-cloud__mascot { font-size: 12px; }
+  .home-splash__brand h2 { font-size: 38px; letter-spacing: -1.4px; }
+}
+
+/* Keep the primary navigation beside the workspace at compact window sizes. */
+@media (max-width: 860px) {
+  .app-shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-width, 190px) minmax(0, 1fr);
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    align-items: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 100vh;
+    padding: 12px 10px;
+    position: relative;
+  }
+
+  .side-nav {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .theme-dock {
+    align-items: stretch;
+    display: grid;
+    gap: 7px;
+    margin-top: auto;
+    padding: 12px 6px 0;
+    width: auto;
+  }
+
+  .theme-dock > span { margin-right: 0; }
+
+  .app-main {
+    height: 100vh;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .view--home-brand,
+  .home-splash {
+    min-height: 100vh;
   }
 }
