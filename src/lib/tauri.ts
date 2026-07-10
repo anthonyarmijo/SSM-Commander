@@ -9,6 +9,7 @@ interface BrowserPreviewConfig {
   designVariant: PreviewDesignVariant;
   initialView: PreviewView;
   instanceDelayMs: number;
+  themeMode: "light" | "dark";
 }
 
 interface PreviewSsoAttemptRecord {
@@ -161,6 +162,7 @@ export function getBrowserPreviewConfig(): BrowserPreviewConfig {
   const params = new URLSearchParams(window.location.search);
   const variantParam = params.get("variant");
   const viewParam = params.get("view");
+  const themeParam = params.get("theme");
   const delayParam = Number(params.get("delayMs") ?? "0");
 
   return {
@@ -172,6 +174,7 @@ export function getBrowserPreviewConfig(): BrowserPreviewConfig {
         ? viewParam
         : "home",
     instanceDelayMs: Number.isFinite(delayParam) ? Math.max(0, delayParam) : 0,
+    themeMode: themeParam === "dark" ? "dark" : "light",
   };
 }
 
@@ -233,7 +236,7 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
           defaultSshUser: "ec2-user",
           sshKeyPath: null,
           preferredRdpClient: null,
-          themeMode: "light",
+          themeMode: preview.themeMode,
           sidebarWidth: 286,
         }
       : {},
