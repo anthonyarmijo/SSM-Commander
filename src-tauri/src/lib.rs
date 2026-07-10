@@ -6,6 +6,7 @@ mod dependencies;
 mod diagnostics;
 mod guacd;
 mod models;
+mod native_freerdp;
 mod platform;
 mod ports;
 mod preferences;
@@ -17,6 +18,7 @@ use credentials::CredentialStore;
 use diagnostics::Diagnostics;
 use guacd::GuacdSidecar;
 use models::SsoLoginAttempt;
+use native_freerdp::NativeRdpManager;
 use process_registry::ProcessRegistry;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,6 +31,7 @@ pub struct AppState {
     credentials: Mutex<CredentialStore>,
     guacamole_bridge: GuacamoleBridge,
     guacd_sidecar: GuacdSidecar,
+    native_rdp: NativeRdpManager,
     sso_login_attempts: Mutex<HashMap<String, SsoLoginAttempt>>,
 }
 
@@ -41,6 +44,7 @@ impl Default for AppState {
             credentials: Mutex::new(CredentialStore::default()),
             guacamole_bridge: GuacamoleBridge::default(),
             guacd_sidecar: GuacdSidecar::default(),
+            native_rdp: NativeRdpManager::default(),
             sso_login_attempts: Mutex::new(HashMap::new()),
         }
     }
@@ -83,6 +87,9 @@ pub fn run() {
             commands::list_console_sessions,
             commands::write_console_input,
             commands::resize_console_terminal,
+            commands::mount_native_rdp,
+            commands::native_rdp_connection_status,
+            commands::native_rdp_smartcard_status,
             commands::stop_session,
             commands::list_active_sessions,
             commands::get_diagnostics,
@@ -98,6 +105,7 @@ pub fn run() {
                         Vec::new()
                     };
                     state.guacamole_bridge.clear_connections();
+                    state.native_rdp.clear(&window.app_handle());
                     if let Ok(mut registry) = state.processes.lock() {
                         for tunnel_id in tunnel_ids {
                             let _ = registry.stop_session(&tunnel_id, &state.diagnostics);

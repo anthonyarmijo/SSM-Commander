@@ -12,8 +12,8 @@ Required:
 
 Recommended:
 
-- Docker for `npm start`, a native `guacd` binary for manual embedded RDP console tabs during development, or the bundled `guacd` sidecar in packaged macOS builds
-- FreeRDP for external RDP fallback
+- FreeRDP 3 for the native embedded macOS RDP renderer
+- Docker/`guacd` only when developing the legacy Guacamole renderer used on Windows
 
 Example Homebrew installs:
 
@@ -23,20 +23,30 @@ brew install --cask session-manager-plugin
 brew install freerdp
 ```
 
-Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The standard
-development command manages this for you:
+macOS embedded RDP uses the upstream FreeRDP Mac view and connects directly to
+the loopback port created by the SSM tunnel. It does not need `guacd`. Install
+FreeRDP and initialize the pinned source submodule before building:
+
+```sh
+brew install freerdp
+git submodule update --init --recursive
+```
+
+On macOS, `npm start` launches the native renderer without Docker. The same
+workflow manages Apache Guacamole's `guacd` bridge only for the legacy/Windows
+renderer:
 
 ```sh
 npm start
 ```
 
-`npm start` requires Docker Desktop to be running. It starts the official
-`guacd` container on `127.0.0.1:4822`, launches Tauri dev mode, and stops the
-container when you quit. The launcher also sets
+When the legacy bridge is enabled, `npm start` requires Docker Desktop. It
+starts the official `guacd` container on `127.0.0.1:4822`, launches Tauri dev
+mode, and stops the container when you quit. The launcher also sets
 `SSM_COMMANDER_GUACD_RDP_HOST=host.docker.internal` so `guacd` can connect back
 to SSM tunnel ports opened on the host.
 
-For manual development, the app expects `guacd` to be reachable on
+For manual legacy/Windows development, the app expects `guacd` to be reachable on
 `127.0.0.1:4822`. Packaged Apple Silicon DMGs can start a bundled native
 sidecar when no bridge is already reachable. Homebrew may not provide a
 `guacamole-server` formula on macOS, so the recommended manual fallback is to
@@ -65,31 +75,27 @@ Native or bundled `guacd` targets `127.0.0.1` by default. Set
 `SSM_COMMANDER_GUACD_RDP_HOST` only if your bridge runs outside the host network
 namespace and needs a different route back to the local SSM tunnel.
 
-To stage the native sidecar for Apple Silicon packaging, install the build
-dependencies first:
+To package the native renderer for Apple Silicon, install FreeRDP first:
 
 ```sh
-brew install cairo freerdp jpeg-turbo libpng openssl@3 ossp-uuid pkgconf
+brew install freerdp
 ```
 
 Then run:
 
 ```sh
-npm run stage:guacd:macos
-file src-tauri/binaries/guacd-aarch64-apple-darwin
-otool -L src-tauri/binaries/guacd-aarch64-apple-darwin
+npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
 ```
 
-The staging script builds Apache Guacamole Server, copies the RDP-capable
-`guacd` binary to `src-tauri/binaries/`, stages required dylibs under
-`src-tauri/resources/macos/lib/`, and fails if relocatable library paths still
-point at Homebrew. Generated sidecar files are ignored by git. Later runs reuse
-valid staged artifacts; set `GUACD_FORCE_REBUILD=1` when you intentionally need
-to rebuild `guacd` from source.
+Tauri invokes `scripts/stage-freerdp-macos.mjs` immediately before bundling.
+It copies the FreeRDP/WinPR dependency closure into
+`src-tauri/resources/macos/lib/`, rewrites the release executable to use that
+app-local library path, and fails if it finds a remaining Homebrew link. You
+can run `npm run stage:freerdp:macos` manually after `cargo build --release` to
+inspect the staging step in isolation.
 
-Packaged builds start the bundled sidecar on a private loopback port for the
-current app process. That avoids reusing stale development or previously mounted
-DMG `guacd` listeners on the default port.
+For smart-card setup and release-validation requirements, read
+[macOS Native RDP and PIV/CAC Redirection](macos-native-rdp-smartcard.md).
 
 The macOS DMG release build is:
 

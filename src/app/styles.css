@@ -1958,6 +1958,14 @@ tr.selected--primary td {
   max-width: fit-content;
 }
 
+.instance-port-toggle small {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
 .instance-port-toggle input {
   accent-color: var(--accent);
   height: 14px;
@@ -2414,6 +2422,30 @@ tr.selected--primary td {
   height: calc(100vh - 42px);
   overflow: hidden;
   position: relative;
+}
+
+.native-freerdp-console {
+  background: #05070a;
+  height: calc(100vh - 42px);
+  overflow: hidden;
+  position: relative;
+}
+
+.native-freerdp-console__display {
+  height: 100%;
+  width: 100%;
+}
+
+.native-freerdp-console__status {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  bottom: 16px;
+  color: var(--text);
+  left: 16px;
+  padding: 10px 12px;
+  pointer-events: none;
+  position: absolute;
 }
 
 .guacamole-console__display {

@@ -5,7 +5,7 @@ export type SsmStatus = "unknown" | "ready" | "notManaged" | "offline" | "access
 export type SessionKind = "shell" | "tunnel" | "rdp" | "ssh";
 export type SessionStatus = "starting" | "active" | "stopping" | "stopped" | "failed";
 export type ConsoleSessionKind = "shell" | "ssh" | "rdp";
-export type ConsoleRenderer = "xterm" | "guacamole";
+export type ConsoleRenderer = "xterm" | "guacamole" | "nativeFreerdp";
 export type RdpSecurityMode = "auto" | "nla" | "nla-ext" | "tls" | "rdp";
 export type CredentialKind = "ssh" | "rdp";
 export type SshAuthMode = "password" | "privateKeyPath" | "privateKeyContent";
@@ -156,6 +156,7 @@ export interface ConsoleSessionRequest {
   rdpPassword?: string | null;
   rdpCredentialId?: string | null;
   rdpSecurityMode?: RdpSecurityMode | null;
+  rdpShareSmartcard?: boolean | null;
   terminalCols?: number | null;
   terminalRows?: number | null;
   width?: number | null;

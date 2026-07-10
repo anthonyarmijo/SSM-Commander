@@ -99,12 +99,12 @@ AppleScript DMG decoration. This avoids local/headless builds hanging in
 `bundle_dmg.sh`; the generated DMG still contains the app, Applications link,
 bundled `guacd`, and staged dylibs.
 
-Embedded RDP currently starts the remote desktop at a stable `1280x720` size and
-fits that desktop inside the visible console pane. Dynamic VM resizing is
-disabled because Guacamole/FreeRDP resize negotiation caused black-screen
-handshake failures in testing. You may still see small black bars above and
-below the RDP view when the app window does not match the remote desktop aspect
-ratio; this is a known scaling limitation and the next improvement area.
+Native macOS RDP chooses the initial remote desktop size from the visible
+console pane rather than forcing a `16:9` resolution. It smart-scales the view
+when the app window is resized, which avoids letterboxing and preserves correct
+pointer mapping. Resizing an existing session does not renegotiate the Windows
+desktop resolution; close and reopen the console if a new native resolution is
+needed.
 
 For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
 for example `EXAMPLE\admin`. Embedded RDP splits that into Guacamole's separate

@@ -272,6 +272,7 @@ pub enum ConsoleSessionKind {
 pub enum ConsoleRenderer {
     Xterm,
     Guacamole,
+    NativeFreerdp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +310,7 @@ pub struct ConsoleSessionRequest {
     pub rdp_password: Option<String>,
     pub rdp_credential_id: Option<String>,
     pub rdp_security_mode: Option<String>,
+    pub rdp_share_smartcard: Option<bool>,
     pub terminal_cols: Option<u16>,
     pub terminal_rows: Option<u16>,
     pub width: Option<u32>,

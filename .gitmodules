@@ -1,0 +1,3 @@
+[submodule "src-tauri/vendor/freerdp"]
+	path = src-tauri/vendor/freerdp
+	url = https://github.com/FreeRDP/FreeRDP.git
