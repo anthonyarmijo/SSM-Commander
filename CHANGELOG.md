@@ -2,11 +2,22 @@
 
 All notable changes to SSM Commander are tracked here.
 
-## Wish List
-
-- Improve embedded RDP scaling so the remote desktop can match the visible console pane without reintroducing handshake failures or black-screen regressions.
-
 ## Unreleased
+
+### 2026-07-09
+
+- Replace the macOS embedded-RDP renderer with a native FreeRDP Mac view that
+  connects directly through existing SSM tunnels.
+- Add opt-in PC/SC PIV/CAC redirection for established macOS RDP sessions and
+  validate certificate authentication inside a Windows VM.
+- Package FreeRDP/WinPR dylibs with the macOS app, including a clean-checkout
+  build-time mouse-coordinate compatibility adjustment for the upstream view.
+- Derive the initial RDP resolution from the visible console pane, smart-scale
+  subsequent window resizes, remove the native focus banner, and show an RDP
+  startup state before the native connection begins.
+- Refresh the workspace UI and simplify Initialize: compact readiness summary,
+  clearer local-tool status, and no obsolete Guacamole bridge environment check.
+- Add macOS native RDP/PIV-CAC setup and validation documentation.
 
 ### 2026-05-13
 

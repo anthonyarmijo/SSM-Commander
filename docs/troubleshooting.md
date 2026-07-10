@@ -2,7 +2,10 @@
 
 ## Environment Is Blocked
 
-Run the environment check in Initialize. Required dependencies are AWS CLI v2 and the Session Manager Plugin. OpenSSH and guacd are reported separately because some workflows can still work without them.
+Run the environment check in Initialize. Required dependencies are AWS CLI v2
+and the Session Manager Plugin. OpenSSH, the bundled terminal PTY, and FreeRDP
+are reported as workflow-specific tools; the legacy Guacamole bridge is not an
+Environment requirement.
 
 ## Profile Validation Fails
 
@@ -40,22 +43,31 @@ The instance must be a managed node, the SSM Agent must be running, and IAM perm
 
 ## Embedded RDP Does Not Open
 
-Embedded RDP uses Apache Guacamole's `guacd` protocol bridge. The app reports a
-failed embedded RDP session when it cannot start or reach a local bridge.
+On macOS, embedded RDP uses the native FreeRDP view directly against the local
+SSM tunnel. Confirm that the Windows RDP service is reachable through the
+tunnel, then check the username, password, domain, and selected RDP security
+mode. A native error code is shown in the Console tab when FreeRDP disconnects.
 
-For the standard local workflow, start the app with:
+For a local macOS development build, install FreeRDP 3 and initialize the
+source submodule:
+
+```sh
+brew install freerdp
+git submodule update --init --recursive
+```
+
+The initial remote desktop size is selected from the visible console pane and
+the view smart-scales after window resizes. Close and reopen the console to
+negotiate a different Windows desktop resolution.
+
+On Windows, embedded RDP remains the legacy Guacamole implementation and needs
+`guacd`. The normal development workflow is:
 
 ```sh
 npm start
 ```
 
-That command requires Docker Desktop to be running. It starts the Guacamole
-container, launches Tauri dev mode, and stops the container when you quit.
-In this workflow the app sets `SSM_COMMANDER_GUACD_RDP_HOST=host.docker.internal`
-so containerized `guacd` can reach SSM tunnels listening on the host.
-
-On macOS, Homebrew may not provide a `guacamole-server` formula. For development,
-you can also run the official `guacd` container manually:
+That command requires Docker Desktop. To manage the bridge manually:
 
 ```sh
 docker run --rm --name ssm-commander-guacd \
@@ -63,54 +75,11 @@ docker run --rm --name ssm-commander-guacd \
   guacamole/guacd
 ```
 
-In another terminal, verify the bridge is reachable:
-
-```sh
-nc -zv 127.0.0.1 4822
-```
-
-If you already have a native `guacd` binary, start it on the address and port the
-app expects:
-
-```sh
-guacd -f -b 127.0.0.1 -l 4822
-```
-
-Native or bundled `guacd` uses `127.0.0.1` as the RDP target host by default.
-Override `SSM_COMMANDER_GUACD_RDP_HOST` only when `guacd` runs somewhere that
-cannot reach host services through loopback, such as a manually managed Docker
-container.
-
-Packaged Apple Silicon DMGs can use a bundled `guacd` sidecar when one is
-available. The app starts the bundled sidecar on a private loopback port and
-stops that owned process on shutdown. Development builds can still use an
-existing bridge on `127.0.0.1:4822` when no bundled sidecar is available. RDP
-credentials entered manually in Console are kept in memory only.
-
-If a packaged build does not include embedded RDP support, re-run:
-
-```sh
-npm run stage:guacd:macos
-npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
-```
-
-The `tauri:build` script sets CI mode on macOS so Tauri skips Finder
-AppleScript DMG decoration. This avoids local/headless builds hanging in
-`bundle_dmg.sh`; the generated DMG still contains the app, Applications link,
-bundled `guacd`, and staged dylibs.
-
-Native macOS RDP chooses the initial remote desktop size from the visible
-console pane rather than forcing a `16:9` resolution. It smart-scales the view
-when the app window is resized, which avoids letterboxing and preserves correct
-pointer mapping. Resizing an existing session does not renegotiate the Windows
-desktop resolution; close and reopen the console if a new native resolution is
-needed.
-
 For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
-for example `EXAMPLE\admin`. Embedded RDP splits that into Guacamole's separate
-`domain` and `username` parameters. The Instances page also includes an advanced
-RDP security selector with Auto, NLA, NLA-Ext, TLS, and RDP options; Auto leaves
-security negotiation to `guacd`.
+for example `EXAMPLE\admin`. The Windows legacy renderer separates that into
+its `domain` and `username` parameters; macOS passes equivalent native FreeRDP
+settings. The Instances page also includes an RDP security selector with Auto,
+NLA, NLA-Ext, TLS, and RDP options.
 
 ## Credential Vault Does Not Unlock
 
@@ -120,14 +89,15 @@ When the vault is locked, saved credential options are unavailable and console l
 
 ## Raw Tauri Dev Mode
 
-Use raw Tauri dev mode when you want to manage Docker or native `guacd`
-yourself:
+Use raw Tauri dev mode when you want to manage the Windows legacy `guacd`
+bridge yourself:
 
 ```sh
 npm run tauri:dev
 ```
 
-This does not start or stop the Guacamole container.
+On macOS this starts the native FreeRDP renderer directly. On Windows it does
+not start or stop the Guacamole container.
 
 ## Tunnels Keep Running
 

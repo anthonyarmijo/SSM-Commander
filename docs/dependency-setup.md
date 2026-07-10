@@ -13,7 +13,6 @@ Required:
 Recommended:
 
 - FreeRDP 3 for the native embedded macOS RDP renderer
-- Docker/`guacd` only when developing the legacy Guacamole renderer used on Windows
 
 Example Homebrew installs:
 
@@ -32,48 +31,11 @@ brew install freerdp
 git submodule update --init --recursive
 ```
 
-On macOS, `npm start` launches the native renderer without Docker. The same
-workflow manages Apache Guacamole's `guacd` bridge only for the legacy/Windows
-renderer:
+On macOS, `npm start` launches the native renderer without Docker or `guacd`:
 
 ```sh
 npm start
 ```
-
-When the legacy bridge is enabled, `npm start` requires Docker Desktop. It
-starts the official `guacd` container on `127.0.0.1:4822`, launches Tauri dev
-mode, and stops the container when you quit. The launcher also sets
-`SSM_COMMANDER_GUACD_RDP_HOST=host.docker.internal` so `guacd` can connect back
-to SSM tunnel ports opened on the host.
-
-For manual legacy/Windows development, the app expects `guacd` to be reachable on
-`127.0.0.1:4822`. Packaged Apple Silicon DMGs can start a bundled native
-sidecar when no bridge is already reachable. Homebrew may not provide a
-`guacamole-server` formula on macOS, so the recommended manual fallback is to
-run the official `guacd` container:
-
-```sh
-docker run --rm --name ssm-commander-guacd \
-  -p 127.0.0.1:4822:4822 \
-  guacamole/guacd
-```
-
-Verify that the bridge is listening before opening an embedded RDP session:
-
-```sh
-nc -zv 127.0.0.1 4822
-```
-
-If you install a native `guacd` binary instead, bind it to the same address and
-port:
-
-```sh
-guacd -f -b 127.0.0.1 -l 4822
-```
-
-Native or bundled `guacd` targets `127.0.0.1` by default. Set
-`SSM_COMMANDER_GUACD_RDP_HOST` only if your bridge runs outside the host network
-namespace and needs a different route back to the local SSM tunnel.
 
 To package the native renderer for Apple Silicon, install FreeRDP first:
 
@@ -96,12 +58,6 @@ inspect the staging step in isolation.
 
 For smart-card setup and release-validation requirements, read
 [macOS Native RDP and PIV/CAC Redirection](macos-native-rdp-smartcard.md).
-
-The macOS DMG release build is:
-
-```sh
-npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
-```
 
 Use environment variables for Apple signing and notarization secrets. Do not
 commit certificates, private keys, app-specific passwords, or API keys. Tauri
@@ -128,11 +84,24 @@ Required:
 Recommended:
 
 - Windows OpenSSH client
-- `guacd` for embedded RDP console tabs during development
 - Remote Desktop Client (`mstsc.exe`) for external RDP fallback
 - Windows Terminal or PowerShell for external terminal fallback
 
 Development builds also require Rust from <https://rustup.rs/>.
+
+Windows continues to use the legacy Guacamole renderer for embedded RDP. Its
+`npm start` workflow requires Docker Desktop and starts `guacd` on
+`127.0.0.1:4822` for the duration of the development session. To manage it
+manually instead, run:
+
+```sh
+docker run --rm --name ssm-commander-guacd \
+  -p 127.0.0.1:4822:4822 \
+  guacamole/guacd
+```
+
+Set `SSM_COMMANDER_GUACD_RDP_HOST` only when that bridge runs outside the host
+network namespace and needs a different route to local SSM tunnel ports.
 
 ## AWS Profile Setup
 

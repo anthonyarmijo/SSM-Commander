@@ -142,6 +142,7 @@ Additional setup and troubleshooting notes live in:
 - [docs/dependency-setup.md](docs/dependency-setup.md)
 - [docs/public-release-checklist.md](docs/public-release-checklist.md)
 - [docs/troubleshooting.md](docs/troubleshooting.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 Native macOS RDP selects its initial remote-desktop dimensions from the visible
 console pane, then smart-scales the desktop as the app window changes. Smart-card
