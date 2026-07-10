@@ -62,7 +62,7 @@ import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormSta
 import { DEFAULT_RDP_DISPLAY_SIZE, getBrowserRdpConsolePaneSize, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
-import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
+import { ASCII_TERRARIUM, isInitializationGatedView, navItems, type ActiveView } from "./navigation";
 import type {
   AwsProfile,
   CapabilityStatus,
@@ -2271,11 +2271,43 @@ export function App() {
 
         {activeView === "home" && (
           <section className="view view--home-brand" aria-labelledby="home-title">
-            <h2 className="visually-hidden" id="home-title">SSM Commander</h2>
-            <div className={`ascii-banner ${isHomeAsciiArmed ? "ascii-banner--armed" : ""}`.trim()} aria-label="SSM Commander">
-              {SSM_COMMANDER_ASCII.map((line, index) => (
-                <pre key={line} style={{ "--line-index": index } as CSSProperties}>{line}</pre>
-              ))}
+            <div className={`home-splash ${isHomeAsciiArmed ? "home-splash--armed" : ""}`.trim()}>
+              <div className="ascii-terrarium" aria-hidden="true">
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--one">+</span>
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--two">*</span>
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--three">.</span>
+
+                <pre className="ascii-terrarium__cloud">{ASCII_TERRARIUM.cloud.join("\n")}</pre>
+
+                <div className="ascii-terrarium__downlink">
+                  <span className="ascii-terrarium__downlink-track">┊{`\n`}┊{`\n`}┊{`\n`}┊</span>
+                  <span className="ascii-terrarium__packet ascii-terrarium__packet--down">■</span>
+                </div>
+
+                <div className="ascii-terrarium__ground">
+                  <div className="ascii-terrarium__device ascii-terrarium__server">
+                    <pre>{ASCII_TERRARIUM.server.join("\n")}</pre>
+                    <span className="ascii-terrarium__leds">●{`\n`}●{`\n`}●</span>
+                  </div>
+
+                  <div className="ascii-terrarium__link">
+                    <span className="ascii-terrarium__link-track">· · · · · · · · ·</span>
+                    <span className="ascii-terrarium__packet ascii-terrarium__packet--across">■</span>
+                  </div>
+
+                  <div className="ascii-terrarium__device ascii-terrarium__laptop">
+                    <pre>{ASCII_TERRARIUM.laptop.join("\n")}</pre>
+                    <span className="ascii-terrarium__cursor">▌</span>
+                  </div>
+                </div>
+
+                <span className="ascii-terrarium__ground-line">. . , . . . , . . . . , . .</span>
+              </div>
+
+              <div className="home-splash__brand">
+                <h2 id="home-title"><span>SSM</span> Commander<i aria-hidden="true">▌</i></h2>
+                <p>A nicer way to use SSM.</p>
+              </div>
             </div>
           </section>
         )}
