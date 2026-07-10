@@ -37,19 +37,28 @@ Also manually inspect generated screenshots, docs, release notes, and the final 
 
 ## Apple Silicon macOS DMG
 
-Stage the generated Apache Guacamole `guacd` sidecar before building the DMG:
+Initialize FreeRDP’s pinned source and build the DMG. The pre-bundle hook
+stages the macOS native-RDP dylib closure automatically:
 
 ```sh
-npm run stage:guacd:macos
-file src-tauri/binaries/guacd-aarch64-apple-darwin
-otool -L src-tauri/binaries/guacd-aarch64-apple-darwin
+git submodule update --init --recursive
 npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
 ```
 
-Confirm `otool -L` output for `guacd` and staged dylibs does not reference
+Also inspect the finished application executable and confirm `otool -L` output
+for it and its staged dylibs does not reference
 `/opt/homebrew` or `/usr/local/opt`. Generated files under
 `src-tauri/binaries/` and `src-tauri/resources/macos/lib/` are local release
 artifacts and should not be committed.
+
+Confirm the bundle contains `Contents/Resources/licenses/FreeRDP-LICENSE` for
+the Apache-2.0 FreeRDP source and libraries used by the native renderer.
+
+With a physical PIV/CAC card, test certificate enumeration and the intended
+in-VM smart-card operation through an embedded macOS RDP tab. Also test card
+removal/reinsertion, reconnect, tab switching, and shutdown. Smart-card NLA
+logon is not a supported release claim unless it has separately passed that
+environment’s test matrix.
 
 Configure signing and notarization with environment variables only:
 `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and

@@ -7,6 +7,7 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "node scripts/stage-freerdp-macos.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -15,8 +16,8 @@
         "title": "SSM Commander",
         "width": 1120,
         "height": 760,
-        "minWidth": 1080,
-        "minHeight": 720
+        "minWidth": 720,
+        "minHeight": 520
       }
     ],
     "security": {

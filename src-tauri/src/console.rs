@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 use crate::diagnostics::Diagnostics;
 use crate::guacd::{self, GuacdReady, GuacdSource};
 use crate::models::{
@@ -59,6 +61,12 @@ pub struct ManagedConsoleSession {
     pty_master: Option<Box<dyn MasterPty + Send>>,
     pty_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     temp_files: Vec<PathBuf>,
+}
+
+impl ManagedConsoleSession {
+    pub fn record(&self) -> &ConsoleSessionRecord {
+        &self.record
+    }
 }
 
 impl ConsoleRegistry {
@@ -840,6 +848,41 @@ pub fn rdp_console_session(
     })
 }
 
+pub fn native_rdp_console_session(
+    request: &ConsoleSessionRequest,
+    tunnel_record: SessionRecord,
+) -> Result<ManagedConsoleSession, String> {
+    let id = Uuid::new_v4().to_string();
+    let record = ConsoleSessionRecord {
+        id,
+        kind: ConsoleSessionKind::Rdp,
+        renderer: ConsoleRenderer::NativeFreerdp,
+        profile: request.profile.clone(),
+        region: request.region.clone(),
+        instance_id: request.instance_id.clone(),
+        started_at: Utc::now().to_rfc3339(),
+        status: SessionStatus::Active,
+        title: format!("RDP {}", request.instance_id),
+        tunnel: tunnel_record.tunnel.clone(),
+        bridge_url: None,
+        connection_token: None,
+        message: Some(if request.rdp_share_smartcard.unwrap_or(false) {
+            "Embedded FreeRDP will share the macOS PC/SC smart card with this Windows session."
+                .to_string()
+        } else {
+            "Embedded native FreeRDP session.".to_string()
+        }),
+    };
+    Ok(ManagedConsoleSession {
+        record,
+        tunnel_session_id: Some(tunnel_record.id),
+        pty_child: None,
+        pty_master: None,
+        pty_writer: None,
+        temp_files: Vec::new(),
+    })
+}
+
 pub fn failed_rdp_console_session(
     request: &ConsoleSessionRequest,
     message: String,
@@ -860,6 +903,35 @@ pub fn failed_rdp_console_session(
         message: Some(message),
     };
 
+    ManagedConsoleSession {
+        record,
+        tunnel_session_id: None,
+        pty_child: None,
+        pty_master: None,
+        pty_writer: None,
+        temp_files: Vec::new(),
+    }
+}
+
+pub fn failed_native_rdp_console_session(
+    request: &ConsoleSessionRequest,
+    message: String,
+) -> ManagedConsoleSession {
+    let record = ConsoleSessionRecord {
+        id: Uuid::new_v4().to_string(),
+        kind: ConsoleSessionKind::Rdp,
+        renderer: ConsoleRenderer::NativeFreerdp,
+        profile: request.profile.clone(),
+        region: request.region.clone(),
+        instance_id: request.instance_id.clone(),
+        started_at: Utc::now().to_rfc3339(),
+        status: SessionStatus::Failed,
+        title: format!("RDP {}", request.instance_id),
+        tunnel: None,
+        bridge_url: None,
+        connection_token: None,
+        message: Some(message),
+    };
     ManagedConsoleSession {
         record,
         tunnel_session_id: None,

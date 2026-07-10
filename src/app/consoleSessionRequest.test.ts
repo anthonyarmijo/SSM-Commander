@@ -36,6 +36,12 @@ describe("console session requests", () => {
     expect(buildConsoleSessionRequest({ ...base, kind: "shell" }).rdpCredentialId).toBeNull();
   });
 
+  it("keeps PIV/CAC sharing opt-in and RDP-only", () => {
+    expect(buildConsoleSessionRequest({ ...base, kind: "rdp" }).rdpShareSmartcard).toBe(false);
+    expect(buildConsoleSessionRequest({ ...base, kind: "rdp", rdpShareSmartcard: true }).rdpShareSmartcard).toBe(true);
+    expect(buildConsoleSessionRequest({ ...base, kind: "ssh", rdpShareSmartcard: true }).rdpShareSmartcard).toBe(false);
+  });
+
   it("combines RDP domain and username", () => {
     expect(buildRdpCredentialUsername("Administrator", "DEMO")).toBe("DEMO\\Administrator");
     expect(buildRdpCredentialUsername("DEMO\\Administrator", "OTHER")).toBe("DEMO\\Administrator");

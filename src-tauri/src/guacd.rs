@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 use crate::diagnostics::Diagnostics;
 use crate::models::{DiagnosticArea, DiagnosticSeverity};
 use std::io::{BufRead, BufReader};

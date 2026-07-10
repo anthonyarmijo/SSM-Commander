@@ -17,11 +17,8 @@ const CONSOLE_TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const CONSOLE_TUNNEL_SETTLE_DELAY: Duration = Duration::from_millis(1_200);
 
 #[tauri::command]
-pub fn check_environment(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<EnvironmentState, String> {
-    let environment = dependencies::check_environment(&app);
+pub fn check_environment(state: State<'_, AppState>) -> Result<EnvironmentState, String> {
+    let environment = dependencies::check_environment();
     match environment.status {
         crate::models::EnvironmentStatus::Ready => {
             state
@@ -573,6 +570,7 @@ pub fn start_console_session(
         return Ok(registry.insert(managed_session));
     }
 
+    #[cfg(not(target_os = "macos"))]
     let guacd_ready = if matches!(request.kind, crate::models::ConsoleSessionKind::Rdp) {
         match state.guacd_sidecar.ensure_ready(&app, &state.diagnostics) {
             Ok(ready) => Some(ready),
@@ -596,6 +594,29 @@ pub fn start_console_session(
     };
 
     hydrate_console_request_credentials(&mut request, &state)?;
+
+    #[cfg(target_os = "macos")]
+    if matches!(request.kind, crate::models::ConsoleSessionKind::Rdp)
+        && (request
+            .rdp_username
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+            || request
+                .rdp_password
+                .as_deref()
+                .is_none_or(|value| value.is_empty()))
+    {
+        let managed_session = console::failed_native_rdp_console_session(
+            &request,
+            "Embedded macOS RDP requires a username and password. Smart-card redirection is available after this initial RDP login; smart-card NLA login is not yet supported."
+                .to_string(),
+        );
+        let mut registry = state
+            .consoles
+            .lock()
+            .map_err(|_| "Console registry is unavailable".to_string())?;
+        return Ok(registry.insert(managed_session));
+    }
 
     let tunnel_request = match request.kind {
         crate::models::ConsoleSessionKind::Shell => {
@@ -636,15 +657,47 @@ pub fn start_console_session(
         crate::models::ConsoleSessionKind::Ssh => {
             console::ssh_console_session(app, &request, tunnel_record)
         }
-        crate::models::ConsoleSessionKind::Rdp => console::rdp_console_session(
-            &request,
-            tunnel_record,
-            &state.guacamole_bridge,
-            guacd_ready
-                .as_ref()
-                .ok_or_else(|| "guacd readiness was not checked for RDP session".to_string())?,
-            &state.diagnostics,
-        ),
+        crate::models::ConsoleSessionKind::Rdp => {
+            #[cfg(target_os = "macos")]
+            {
+                let managed = console::native_rdp_console_session(&request, tunnel_record)?;
+                let port = managed
+                    .record()
+                    .tunnel
+                    .as_ref()
+                    .map(|tunnel| tunnel.local_port)
+                    .ok_or_else(|| "RDP tunnel was not created".to_string())?;
+                state.native_rdp.register(
+                    managed.record().id.clone(),
+                    crate::native_freerdp::NativeRdpConfig {
+                        host: "127.0.0.1".to_string(),
+                        port,
+                        username: request
+                            .rdp_username
+                            .clone()
+                            .or_else(|| request.username.clone()),
+                        password: request.rdp_password.clone(),
+                        security_mode: request.rdp_security_mode.clone(),
+                        share_smartcard: request.rdp_share_smartcard.unwrap_or(false),
+                        desktop_width: request.width.unwrap_or(1280),
+                        desktop_height: request.height.unwrap_or(720),
+                    },
+                );
+                Ok(managed)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                console::rdp_console_session(
+                    &request,
+                    tunnel_record,
+                    &state.guacamole_bridge,
+                    guacd_ready.as_ref().ok_or_else(|| {
+                        "guacd readiness was not checked for RDP session".to_string()
+                    })?,
+                    &state.diagnostics,
+                )
+            }
+        }
     }?;
 
     let mut registry = state
@@ -656,6 +709,7 @@ pub fn start_console_session(
 
 #[tauri::command]
 pub fn stop_console_session(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<ConsoleSessionRecord, String> {
@@ -675,8 +729,65 @@ pub fn stop_console_session(
     if let Some(token) = record.connection_token.as_deref() {
         state.guacamole_bridge.remove_connection(token);
     }
+    state.native_rdp.remove(&app, &session_id);
 
     Ok(record)
+}
+
+#[tauri::command]
+pub fn mount_native_rdp(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    session_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        state
+            .native_rdp
+            .mount(window, &session_id, x, y, width, height, visible)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, state, session_id, x, y, width, height, visible);
+        Err("Native embedded FreeRDP is currently available on macOS only.".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_rdp_connection_status(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<crate::native_freerdp::NativeRdpConnectionStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        state.native_rdp.connection_status(window, &session_id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, state, session_id);
+        Err("Native embedded FreeRDP is currently available on macOS only.".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_rdp_smartcard_status(
+    state: State<'_, AppState>,
+) -> Result<crate::native_freerdp::NativeSmartcardStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(state.native_rdp.smartcard_status())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Err("Native PIV/CAC redirection is currently available on macOS only.".to_string())
+    }
 }
 
 #[tauri::command]

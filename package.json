@@ -14,6 +14,7 @@
     "tauri:dev": "tauri dev",
     "build": "tsc && vite build",
     "stage:guacd:macos": "node scripts/stage-guacd-macos.mjs",
+    "stage:freerdp:macos": "node scripts/stage-freerdp-macos.mjs",
     "tauri:build": "node scripts/tauri-build.mjs",
     "test": "vitest run",
     "lint": "tsc --noEmit",

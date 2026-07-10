@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen } from "@tauri-apps/api/event";
@@ -58,10 +59,10 @@ import { resolveTooltipPlacement, type TooltipPreference } from "./tooltipPlacem
 import { shouldAutoCloseEndedConsoleSession } from "./consoleLifecycle";
 import { buildConsoleSessionRequest } from "./consoleSessionRequest";
 import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormState } from "./credentialForm";
-import { DEFAULT_RDP_DISPLAY_SIZE, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
+import { DEFAULT_RDP_DISPLAY_SIZE, getBrowserRdpConsolePaneSize, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
-import { isInitializationGatedView, navItems, SSM_COMMANDER_ASCII, type ActiveView } from "./navigation";
+import { ASCII_TERRARIUM, isInitializationGatedView, navItems, type ActiveView } from "./navigation";
 import type {
   AwsProfile,
   CapabilityStatus,
@@ -503,6 +504,7 @@ export function App() {
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<string[]>([]);
   const [selectionAnchorId, setSelectionAnchorId] = useState("");
   const [isInstancesLoading, setIsInstancesLoading] = useState(false);
+  const [isConsoleOpening, setIsConsoleOpening] = useState(false);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [consoleSessions, setConsoleSessions] = useState<ConsoleSessionRecord[]>([]);
   const [activeConsoleSessionId, setActiveConsoleSessionId] = useState("");
@@ -521,6 +523,9 @@ export function App() {
   const [rdpDomain, setRdpDomain] = useState("");
   const [rdpPassword, setRdpPassword] = useState("");
   const [rdpSecurityMode, setRdpSecurityMode] = useState<RdpSecurityMode>("auto");
+  const [rdpShareSmartcard, setRdpShareSmartcard] = useState(false);
+  const supportsNativeRdpSmartcard = isTauriRuntime() && /Macintosh|Mac OS X/.test(navigator.userAgent);
+  const [nativeSmartcardReaderCount, setNativeSmartcardReaderCount] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [logsCopyStatus, setLogsCopyStatus] = useState("");
   const [query, setQuery] = useState("");
@@ -615,6 +620,11 @@ export function App() {
     : null;
   const showInstancesRefreshing = isInstancesLoading && instances.length > 0;
   const showInitialInstancesLoader = isInstancesLoading && instances.length === 0;
+  const nativeSmartcardPreflightMessage = nativeSmartcardReaderCount === 0
+    ? "No macOS PC/SC smart-card reader is currently detected."
+    : nativeSmartcardReaderCount !== null && nativeSmartcardReaderCount < 0
+      ? "macOS SmartCard Services is unavailable."
+      : "";
   const instanceBrowserMaxWidth = getMaxInstanceBrowserWidth(sidebarWidth);
   const appShellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -634,17 +644,6 @@ export function App() {
     hasInstancesNoticeError ? "notice--error" : "",
     hasInstancesNoticeWarning ? "notice--warning" : "",
   ].filter(Boolean).join(" ");
-  const environmentReadinessState = environment?.status === "ready" ? "good" : "warn";
-  const activeProfileReadinessState =
-    activeProfileState?.authStatus === "valid"
-      ? "good"
-      : activeProfileState?.authStatus === "expired"
-        ? "warn"
-        : activeProfileState?.authStatus === "error"
-          ? "bad"
-          : "neutral";
-  const instancesReadinessState = instances.length > 0 ? "info" : "neutral";
-  const sessionsReadinessState = sessions.length > 0 ? "info" : "neutral";
   const canConnectToInstance = Boolean(
     activeProfileReady && selectedInstance?.state === "running" && selectedInstance?.ssmStatus === "ready",
   );
@@ -1637,45 +1636,59 @@ export function App() {
   ) {
     const trimmedInstanceId = instanceId.trim();
     if (!activeProfile || !activeProfileRegion || !trimmedInstanceId) return;
-    const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
-      request: buildConsoleSessionRequest({
-        kind,
-        profile: activeProfile,
-        region: activeProfileRegion,
-        instanceId: trimmedInstanceId,
-        localPort: kind === "shell"
-          ? null
-          : localPortOverride === undefined
-            ? (customLocalPort ? Number(customLocalPort) : null)
-            : localPortOverride,
-        sshUser,
-        sshPassword,
-        sshKeyPath,
-        sshPrivateKeyContent,
-        sshCredentialId: selectedSshCredentialId,
-        rdpUsername,
-        rdpDomain,
-        rdpPassword,
-        rdpCredentialId: selectedRdpCredentialId,
-        rdpSecurityMode,
-        terminalCols: 100,
-        terminalRows: 30,
-        width: DEFAULT_RDP_DISPLAY_SIZE.width,
-        height: DEFAULT_RDP_DISPLAY_SIZE.height,
-      }),
+    const rdpDisplaySize = kind === "rdp"
+      ? getBrowserRdpConsolePaneSize(sidebarWidth)
+      : DEFAULT_RDP_DISPLAY_SIZE;
+    // Force the state change into the WebView before native startup blocks
+    // briefly while it establishes the SSM tunnel and RDP link.
+    flushSync(() => setIsConsoleOpening(true));
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
     });
-    setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
-    setActiveConsoleSessionId(session.id);
-    setActiveView("console");
-    setIsConsoleDialogOpen(false);
-    setRdpPassword("");
-    setNotice(
-      session.status === "failed"
-        ? session.message || "Console session could not start."
-        : `${consoleKindLabel(kind)} console opened for ${trimmedInstanceId}.`,
-    );
-    await loadSessions();
-    await loadDiagnostics();
+    try {
+      const session = await invokeCommand<ConsoleSessionRecord>("start_console_session", {
+        request: buildConsoleSessionRequest({
+          kind,
+          profile: activeProfile,
+          region: activeProfileRegion,
+          instanceId: trimmedInstanceId,
+          localPort: kind === "shell"
+            ? null
+            : localPortOverride === undefined
+              ? (customLocalPort ? Number(customLocalPort) : null)
+              : localPortOverride,
+          sshUser,
+          sshPassword,
+          sshKeyPath,
+          sshPrivateKeyContent,
+          sshCredentialId: selectedSshCredentialId,
+          rdpUsername,
+          rdpDomain,
+          rdpPassword,
+          rdpCredentialId: selectedRdpCredentialId,
+          rdpSecurityMode,
+          rdpShareSmartcard,
+          terminalCols: 100,
+          terminalRows: 30,
+          width: rdpDisplaySize.width,
+          height: rdpDisplaySize.height,
+        }),
+      });
+      setConsoleSessions((current) => [session, ...current.filter((existing) => existing.id !== session.id)]);
+      setActiveConsoleSessionId(session.id);
+      setActiveView("console");
+      setIsConsoleDialogOpen(false);
+      setRdpPassword("");
+      setNotice(
+        session.status === "failed"
+          ? session.message || "Console session could not start."
+          : `${consoleKindLabel(kind)} console opened for ${trimmedInstanceId}.`,
+      );
+      await loadSessions();
+      await loadDiagnostics();
+    } finally {
+      setIsConsoleOpening(false);
+    }
   }
 
   async function stopConsoleSession(sessionId: string, options: { manual?: boolean } = {}) {
@@ -1858,6 +1871,21 @@ export function App() {
   useEffect(() => {
     activeConsoleSessionIdRef.current = activeConsoleSessionId;
   }, [activeConsoleSessionId]);
+
+  useEffect(() => {
+    if (!supportsNativeRdpSmartcard) return;
+    let cancelled = false;
+    void invokeCommand<{ readerCount: number }>("native_rdp_smartcard_status")
+      .then(({ readerCount }) => {
+        if (!cancelled) setNativeSmartcardReaderCount(readerCount);
+      })
+      .catch(() => {
+        if (!cancelled) setNativeSmartcardReaderCount(-1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supportsNativeRdpSmartcard]);
 
   useEffect(() => {
     if (instanceSort && !instanceTableVisibleColumns.includes(instanceSort.columnId)) {
@@ -2232,21 +2260,71 @@ export function App() {
 
         {activeView === "home" && (
           <section className="view view--home-brand" aria-labelledby="home-title">
-            <h2 className="visually-hidden" id="home-title">SSM Commander</h2>
-            <div className={`ascii-banner ${isHomeAsciiArmed ? "ascii-banner--armed" : ""}`.trim()} aria-label="SSM Commander">
-              {SSM_COMMANDER_ASCII.map((line, index) => (
-                <pre key={line} style={{ "--line-index": index } as CSSProperties}>{line}</pre>
-              ))}
+            <div className={`home-splash ${isHomeAsciiArmed ? "home-splash--armed" : ""}`.trim()}>
+              <div className="ascii-terrarium" aria-hidden="true">
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--one">+</span>
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--two">*</span>
+                <span className="ascii-terrarium__spark ascii-terrarium__spark--three">.</span>
+
+                <pre className="ascii-terrarium__cloud">{ASCII_TERRARIUM.cloud.join("\n")}</pre>
+
+                <div className="ascii-terrarium__downlink">
+                  <span className="ascii-terrarium__downlink-track">┊{`\n`}┊{`\n`}┊{`\n`}┊</span>
+                  <span className="ascii-terrarium__packet ascii-terrarium__packet--down">■</span>
+                </div>
+
+                <div className="ascii-terrarium__ground">
+                  <div className="ascii-terrarium__device ascii-terrarium__server">
+                    <pre>{ASCII_TERRARIUM.server.join("\n")}</pre>
+                    <span className="ascii-terrarium__leds">●{`\n`}●{`\n`}●</span>
+                  </div>
+
+                  <div className="ascii-terrarium__link">
+                    <span className="ascii-terrarium__link-track">· · · · · · · · ·</span>
+                    <span className="ascii-terrarium__packet ascii-terrarium__packet--across">■</span>
+                  </div>
+
+                  <div className="ascii-terrarium__device ascii-terrarium__laptop">
+                    <pre>{ASCII_TERRARIUM.laptop.join("\n")}</pre>
+                    <span className="ascii-terrarium__cursor">▌</span>
+                  </div>
+                </div>
+
+                <span className="ascii-terrarium__ground-line">. . , . . . , . . . . , . .</span>
+              </div>
+
+              <div className="home-splash__brand">
+                <h2 id="home-title"><span>SSM</span> Commander<i aria-hidden="true">▌</i></h2>
+                <p>A nicer way to use SSM.</p>
+              </div>
             </div>
           </section>
         )}
 
         {activeView === "initialize" && (
           <section className="view view--initialize" aria-labelledby="initialize-title">
-            <header className="topbar">
+            <header className="topbar initialize-topbar">
               <div>
                 <p className="eyebrow">Initialize</p>
                 <h2 id="initialize-title">Profiles and environment</h2>
+              </div>
+              <div className="initialize-topbar__summary" aria-label="Workspace readiness">
+                <span>
+                  <small>Environment</small>
+                  <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
+                </span>
+                <span>
+                  <small>Active profile</small>
+                  <strong>{activeProfile || "None"}</strong>
+                </span>
+                <span>
+                  <small>Instances</small>
+                  <strong>{instances.length}</strong>
+                </span>
+                <span>
+                  <small>Sessions</small>
+                  <strong>{sessions.length}</strong>
+                </span>
               </div>
             </header>
 
@@ -2262,14 +2340,17 @@ export function App() {
               </div>
             )}
 
-            <section className="panel environment-panel environment-panel--initialize">
-              <div className="section-heading">
-                <h2>Environment</h2>
+            <section className="panel environment-panel environment-panel--initialize" aria-label="Local connection tools">
+              <div className="environment-panel__header">
+                <div>
+                  <p className="eyebrow">Local tools</p>
+                  <h2>Connection readiness</h2>
+                  <p>Tools required to discover instances and open SSM sessions.</p>
+                </div>
                 <button className="button-secondary environment-panel__check-button" onClick={() => void checkEnvironment()} type="button">
-                  Check
+                  Refresh
                 </button>
               </div>
-              <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
               <div className="check-list">
                 {environment?.checks.map((check) => {
                   const detail = formatDependencyDetail(check);
@@ -2573,24 +2654,6 @@ export function App() {
               )}
             </section>
 
-            <section className="panel readiness-panel" aria-label="Readiness summary">
-              <div className={`readiness-item readiness-item--${environmentReadinessState}`}>
-                <span>Environment</span>
-                <StatusPill label={environment?.status ?? "unchecked"} tone={environment?.status === "ready" ? "good" : "warn"} />
-              </div>
-              <div className={`readiness-item readiness-item--${activeProfileReadinessState}`}>
-                <span>Active profile</span>
-                <strong className="readiness-item__value readiness-item__value--profile">{activeProfile || "None"}</strong>
-              </div>
-              <div className={`readiness-item readiness-item--${instancesReadinessState}`}>
-                <span>Instances</span>
-                <strong>{instances.length}</strong>
-              </div>
-              <div className={`readiness-item readiness-item--${sessionsReadinessState}`}>
-                <span>SSM Activity</span>
-                <strong>{sessions.length}</strong>
-              </div>
-            </section>
           </section>
         )}
 
@@ -3042,7 +3105,7 @@ export function App() {
                             <div className="connection-actions__fields connection-actions__fields--rdp">
                               <label>
                                 RDP username
-                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                                <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required for native macOS RDP" : "Optional"} value={rdpUsername} />
                               </label>
                               <label>
                                 RDP domain
@@ -3050,7 +3113,7 @@ export function App() {
                               </label>
                               <label>
                                 RDP password
-                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                                <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required; kept in memory only" : "Kept in memory only"} type="password" value={rdpPassword} />
                               </label>
                               <label>
                                 RDP security
@@ -3060,6 +3123,15 @@ export function App() {
                                   ))}
                                 </select>
                               </label>
+                              {supportsNativeRdpSmartcard && (
+                                <label className="instance-port-toggle">
+                                  <input checked={rdpShareSmartcard} onChange={(event) => setRdpShareSmartcard(event.target.checked)} type="checkbox" />
+                                  <span>
+                                    Share macOS PIV/CAC smart card with this RDP session
+                                    {nativeSmartcardPreflightMessage && <small>{nativeSmartcardPreflightMessage}</small>}
+                                  </span>
+                                </label>
+                              )}
                             </div>
                           )}
 
@@ -3082,12 +3154,12 @@ export function App() {
                         <div className="action-stack connection-actions__buttons">
                           <button
                             className="button-primary"
-                            disabled={!canConnectToInstance}
+                            disabled={!canConnectToInstance || isConsoleOpening}
                             onClick={() => void startConsoleSession(instanceConnectionKind, selectedInstance.instanceId, getInstanceActionsLocalPort())}
                             title={connectionDisabledTitle}
                             type="button"
                           >
-                            {consoleOpenLabel(instanceConnectionKind)}
+                            {isConsoleOpening ? <LoadingIndicator label="Opening RDP…" /> : consoleOpenLabel(instanceConnectionKind)}
                           </button>
                           <button disabled={!canConnectToInstance} onClick={() => openTunnelDialog(selectedInstance.instanceId)} title={connectionDisabledTitle} type="button">
                             Start Tunnel
@@ -3310,7 +3382,7 @@ export function App() {
                     <>
                       <label>
                         RDP username
-                        <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder="Optional" value={rdpUsername} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpUsername(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required for native macOS RDP" : "Optional"} value={rdpUsername} />
                       </label>
                       <label>
                         RDP domain
@@ -3318,7 +3390,7 @@ export function App() {
                       </label>
                       <label>
                         RDP password
-                        <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder="Kept in memory only" type="password" value={rdpPassword} />
+                        <input {...technicalInputProps} onChange={(event) => setRdpPassword(event.target.value)} placeholder={supportsNativeRdpSmartcard ? "Required; kept in memory only" : "Kept in memory only"} type="password" value={rdpPassword} />
                       </label>
                       <label>
                         RDP security
@@ -3328,6 +3400,15 @@ export function App() {
                           ))}
                         </select>
                       </label>
+                      {supportsNativeRdpSmartcard && (
+                        <label className="instance-port-toggle">
+                          <input checked={rdpShareSmartcard} onChange={(event) => setRdpShareSmartcard(event.target.checked)} type="checkbox" />
+                          <span>
+                            Share macOS PIV/CAC smart card with this RDP session
+                            {nativeSmartcardPreflightMessage && <small>{nativeSmartcardPreflightMessage}</small>}
+                          </span>
+                        </label>
+                      )}
                     </>
                   ) : (
                     null
@@ -3342,12 +3423,12 @@ export function App() {
                     <button className="button-ghost" onClick={() => setIsConsoleDialogOpen(false)} type="button">Cancel</button>
                     <button
                       className="button-primary"
-                      disabled={!canOpenConsoleDialog}
+                      disabled={!canOpenConsoleDialog || isConsoleOpening}
                       onClick={() => void startConsoleSession(consoleSessionKind, consoleInstanceId)}
                       title={consoleDialogDisabledTitle}
                       type="button"
                     >
-                      {consoleOpenLabel(consoleSessionKind)}
+                      {isConsoleOpening ? <LoadingIndicator label="Opening RDP…" /> : consoleOpenLabel(consoleSessionKind)}
                     </button>
                   </div>
                 </div>
@@ -3358,6 +3439,8 @@ export function App() {
               <section className="console-workspace" role="tabpanel">
                 {activeConsoleSession.renderer === "xterm" ? (
                   <XtermConsole session={activeConsoleSession} />
+                ) : activeConsoleSession.renderer === "nativeFreerdp" ? (
+                  <NativeFreerdpConsole isVisible={activeView === "console"} session={activeConsoleSession} />
                 ) : (
                   <GuacamoleConsole isVisible={activeView === "console"} session={activeConsoleSession} />
                 )}
@@ -3579,6 +3662,93 @@ function sampleGuacamoleDisplay(guacDisplay: {
   } catch (error) {
     return `sampleError=${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+function NativeFreerdpConsole({ isVisible, session }: { isVisible: boolean; session: ConsoleSessionRecord }) {
+  const displayRef = useRef<HTMLDivElement | null>(null);
+  const connectionEndedRef = useRef(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const display = displayRef.current;
+    if (!display) return;
+    connectionEndedRef.current = false;
+    let cancelled = false;
+    let animationFrame = 0;
+    let statusTimer = 0;
+    const mount = () => {
+      animationFrame = 0;
+      if (cancelled || connectionEndedRef.current) return;
+      const rect = display.getBoundingClientRect();
+      const visible = isVisible && rect.width > 1 && rect.height > 1;
+      void invokeCommand("mount_native_rdp", {
+        sessionId: session.id,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        visible,
+      }).then(() => {
+        if (!cancelled) setError("");
+      }).catch((mountError) => {
+        if (!cancelled) setError(mountError instanceof Error ? mountError.message : String(mountError));
+      });
+    };
+    const scheduleMount = () => {
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(mount);
+    };
+    const pollConnection = () => {
+      if (cancelled || !isVisible || connectionEndedRef.current) return;
+      void invokeCommand<{
+        state: "connecting" | "connected" | "disconnected";
+        error?: string;
+      }>("native_rdp_connection_status", {
+        sessionId: session.id,
+      }).then(({ state, error: nativeError }) => {
+        if (cancelled || state !== "disconnected") return;
+        connectionEndedRef.current = true;
+        const detail = nativeError ? ` FreeRDP reported: ${nativeError}.` : "";
+        setError(`Native RDP disconnected. Check the RDP credentials, the instance’s RDP service, and the SSM tunnel.${detail}`);
+        void invokeCommand("mount_native_rdp", {
+          sessionId: session.id,
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          visible: false,
+        });
+      }).catch(() => {
+        // A just-created view may not have been stored before the first poll.
+      });
+    };
+    const observer = new ResizeObserver(scheduleMount);
+    observer.observe(display);
+    window.addEventListener("resize", scheduleMount);
+    scheduleMount();
+    statusTimer = window.setInterval(pollConnection, 1_000);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleMount);
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      if (statusTimer) window.clearInterval(statusTimer);
+      void invokeCommand("mount_native_rdp", {
+        sessionId: session.id,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        visible: false,
+      });
+    };
+  }, [isVisible, session.id]);
+
+  return (
+    <div className="native-freerdp-console">
+      <div className="native-freerdp-console__display" ref={displayRef} />
+      {error && <div className="native-freerdp-console__status">{error}</div>}
+    </div>
+  );
 }
 
 function GuacamoleConsole({ isVisible, session }: { isVisible: boolean; session: ConsoleSessionRecord }) {

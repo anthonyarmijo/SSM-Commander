@@ -13,6 +13,7 @@ const guacdHost = "127.0.0.1";
 const guacdPort = 4822;
 const guacdReadyTimeoutMs = 30_000;
 const guacdStopTimeoutMs = 10_000;
+const useGuacd = process.platform !== "darwin" || process.env.SSM_COMMANDER_ENABLE_GUACD_DEV === "1";
 
 let tauriProcess;
 let startedContainer = false;
@@ -297,10 +298,9 @@ async function shutdown(exitCode = 0, signal) {
 function startTauri() {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   tauriProcess = spawn(npmCommand, ["run", "tauri:dev"], {
-    env: {
-      ...process.env,
-      SSM_COMMANDER_GUACD_RDP_HOST: "host.docker.internal",
-    },
+    env: useGuacd
+      ? { ...process.env, SSM_COMMANDER_GUACD_RDP_HOST: "host.docker.internal" }
+      : process.env,
     stdio: "inherit",
   });
 
@@ -327,17 +327,19 @@ process.on("uncaughtException", async (error) => {
 
 try {
   cleanStaleTauriBuildCache();
-  ensureDocker();
-  const removedContainer = removeNamedContainer();
-  if (removedContainer) {
-    await waitForPortState(
-      false,
-      5_000,
-      `Timed out waiting for ${guacdHost}:${guacdPort} to be released after removing ${containerName}.`,
-    );
+  if (useGuacd) {
+    ensureDocker();
+    const removedContainer = removeNamedContainer();
+    if (removedContainer) {
+      await waitForPortState(
+        false,
+        5_000,
+        `Timed out waiting for ${guacdHost}:${guacdPort} to be released after removing ${containerName}.`,
+      );
+    }
+    await assertGuacdPortFree();
+    await startGuacd();
   }
-  await assertGuacdPortFree();
-  await startGuacd();
   startTauri();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
