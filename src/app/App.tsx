@@ -2261,40 +2261,26 @@ export function App() {
         {activeView === "home" && (
           <section className="view view--home-brand" aria-labelledby="home-title">
             <div className={`home-splash ${isHomeAsciiArmed ? "home-splash--armed" : ""}`.trim()}>
-              <div className="ascii-terrarium" aria-hidden="true">
-                <span className="ascii-terrarium__spark ascii-terrarium__spark--one">+</span>
-                <span className="ascii-terrarium__spark ascii-terrarium__spark--two">*</span>
-                <span className="ascii-terrarium__spark ascii-terrarium__spark--three">.</span>
-
-                <pre className="ascii-terrarium__cloud">{ASCII_TERRARIUM.cloud.join("\n")}</pre>
-
-                <div className="ascii-terrarium__downlink">
-                  <span className="ascii-terrarium__downlink-track">┊{`\n`}┊{`\n`}┊{`\n`}┊</span>
-                  <span className="ascii-terrarium__packet ascii-terrarium__packet--down">■</span>
+              <div className="living-cloud" aria-hidden="true">
+                <span className="living-cloud__spark living-cloud__spark--one">+</span>
+                <span className="living-cloud__spark living-cloud__spark--two">*</span>
+                <span className="living-cloud__spark living-cloud__spark--three">·</span>
+                <span className="living-cloud__spark living-cloud__spark--four">+</span>
+                <pre className="living-cloud__mascot">{ASCII_TERRARIUM.cloud.join("\n")}</pre>
+                <div className="living-cloud__link">
+                  <span className="living-cloud__packet living-cloud__packet--one">■</span>
+                  <span>┆</span>
+                  <span className="living-cloud__packet living-cloud__packet--two">▪</span>
+                  <span>┆</span>
+                  <span className="living-cloud__packet living-cloud__packet--three">▪</span>
+                  <span>┆</span>
+                  <span className="living-cloud__packet living-cloud__packet--four">■</span>
                 </div>
-
-                <div className="ascii-terrarium__ground">
-                  <div className="ascii-terrarium__device ascii-terrarium__server">
-                    <pre>{ASCII_TERRARIUM.server.join("\n")}</pre>
-                    <span className="ascii-terrarium__leds">●{`\n`}●{`\n`}●</span>
-                  </div>
-
-                  <div className="ascii-terrarium__link">
-                    <span className="ascii-terrarium__link-track">· · · · · · · · ·</span>
-                    <span className="ascii-terrarium__packet ascii-terrarium__packet--across">■</span>
-                  </div>
-
-                  <div className="ascii-terrarium__device ascii-terrarium__laptop">
-                    <pre>{ASCII_TERRARIUM.laptop.join("\n")}</pre>
-                    <span className="ascii-terrarium__cursor">▌</span>
-                  </div>
-                </div>
-
-                <span className="ascii-terrarium__ground-line">. . , . . . , . . . . , . .</span>
+                <div className="living-cloud__prompt">&gt;_ <span /></div>
               </div>
 
               <div className="home-splash__brand">
-                <h2 id="home-title"><span>SSM</span> Commander<i aria-hidden="true">▌</i></h2>
+                <h2 id="home-title"><span>SSM</span> Commander</h2>
                 <p>A nicer way to use SSM.</p>
               </div>
             </div>
