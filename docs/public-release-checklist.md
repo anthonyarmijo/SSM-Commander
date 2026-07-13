@@ -1,94 +1,13 @@
 # Public Release Checklist
 
-Use this checklist before publishing SSM Commander v1.0 or any later public release. Do not publish a repository that previously contained private environment metadata in any reachable, dangling, rewritten, forked, or cached history.
+The complete recurring release runbook is [docs/releasing.md](releasing.md).
+This page is the short final gate; the old one-time fresh-repository export is
+not part of the normal release path.
 
-## Fresh Repository Export
-
-Create the public repository from a clean archive of the current tree:
-
-```sh
-git archive --format=tar HEAD | tar -x -C ../ssm-commander-public
-cd ../ssm-commander-public
-git init
-git add .
-git commit -m "Initial public release"
-git remote add origin <new-public-repo-url>
-```
-
-Before pushing a fresh public repository, run the checks below in the exported tree.
-
-## Required Checks
-
-```sh
-npm ci
-npm audit
-npm test
-npm run lint
-npm run build
-npm run scan:secrets
-cd src-tauri
-cargo test
-cargo check
-cd ..
-git fsck --no-reflogs --full
-```
-
-Also manually inspect generated screenshots, docs, release notes, and the final `git status --short --branch` before publishing.
-
-## Apple Silicon macOS DMG
-
-Initialize FreeRDP’s pinned source and build the DMG. The pre-bundle hook
-stages the macOS native-RDP dylib closure automatically:
-
-```sh
-git submodule update --init --recursive
-npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
-```
-
-Also inspect the finished application executable and confirm `otool -L` output
-for it and its staged dylibs does not reference
-`/opt/homebrew` or `/usr/local/opt`. Generated files under
-`src-tauri/binaries/` and `src-tauri/resources/macos/lib/` are local release
-artifacts and should not be committed.
-
-Confirm the bundle contains `Contents/Resources/licenses/FreeRDP-LICENSE` for
-the Apache-2.0 FreeRDP source and libraries used by the native renderer.
-
-With a physical PIV/CAC card, test certificate enumeration and the intended
-in-VM smart-card operation through an embedded macOS RDP tab. Also test card
-removal/reinsertion, reconnect, tab switching, and shutdown. Smart-card NLA
-logon is not a supported release claim unless it has separately passed that
-environment’s test matrix.
-
-Configure signing and notarization with environment variables only:
-`APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and
-either `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` or `APPLE_ID`,
-`APPLE_PASSWORD`, `APPLE_TEAM_ID`. Do not commit certificates, private keys,
-notarization secrets, Apple credentials, or raw local credentials.
-
-Reference Tauri's docs for
-[external binaries](https://tauri.app/develop/sidecar/),
-[macOS signing and notarization](https://tauri.app/distribute/sign/macos/), and
-[platform-specific config](https://v2.tauri.app/ko/reference/config/).
-
-## Tagging v1.0
-
-Create the launch tag only after the release commit is verified:
-
-```sh
-git tag -a v1.0 -m "SSM Commander v1.0"
-git tag --list v1.0
-```
-
-Push the tag when you are ready to publish the GitHub release:
-
-```sh
-git push origin main v1.0
-```
-
-## Notes
-
-- `npm run scan:secrets` expects `gitleaks` to be installed locally.
-- The CI workflow runs Gitleaks against full Git history on pull requests and pushes to `main`.
-- Keep screenshots and preview fixtures fictional. Avoid account IDs, ARNs, SSO start URLs, profile names from real environments, instance IDs, private IPs, VPC/subnet IDs, hostnames, and key paths.
-- Saved SSH/RDP credentials belong only in the encrypted local vault. Do not commit exported vault files, pasted private keys, local key paths, or real connection screenshots.
+- [ ] Version, changelog, tag, and release assets agree on `vX.Y.Z`.
+- [ ] Frontend, Rust, secret-scan, DMG, signing, notarization, and bundle checks pass.
+- [ ] The GitHub release is still a draft and contains the Apple Silicon DMG and SHA-256 checksum.
+- [ ] A clean-Mac smoke test and any required PIV/CAC validation are complete.
+- [ ] Screenshots and fixtures are fictional and contain no account IDs, ARNs, SSO URLs, profile names, instance IDs, addresses, hostnames, or key paths.
+- [ ] No vault exports, private keys, Apple credentials, certificates, or environment files are included.
+- [ ] A human has reviewed the draft release and deliberately publishes it.

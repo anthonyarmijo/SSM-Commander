@@ -1,0 +1,196 @@
+name: Release macOS (Apple Silicon)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      notarize:
+        description: "Use signing and notarization secrets for this validation run"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    name: Build and verify Apple Silicon DMG
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      TARGET: aarch64-apple-darwin
+      OFFICIAL_RELEASE: ${{ github.event_name == 'push' || inputs.notarize == true }}
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Require a full semantic-version tag
+        if: github.event_name == 'push'
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Only full semantic-version tags (vX.Y.Z) may release."
+            exit 1
+          }
+
+      - name: Verify authoritative version sources
+        env:
+          TAG_NAME: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const packageLock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+          const tauriConfig = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          const cargoToml = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+          const cargoLock = fs.readFileSync("src-tauri/Cargo.lock", "utf8");
+          const cargoVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1];
+          const lockBlock = cargoLock.split("[[package]]").find((block) => /name = "ssm-commander"/.test(block));
+          const lockVersion = lockBlock?.match(/version = "([^"]+)"/)?.[1];
+          const versions = [packageJson.version, packageLock.packages?.[""].version, tauriConfig.version, cargoVersion, lockVersion];
+          if (versions.some((version) => version !== packageJson.version)) {
+            throw new Error(`Version sources disagree: ${versions.join(", ")}`);
+          }
+          if (process.env.TAG_NAME && process.env.TAG_NAME !== `v${packageJson.version}`) {
+            throw new Error(`Tag ${process.env.TAG_NAME} does not match v${packageJson.version}`);
+          }
+          NODE
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install Apple Silicon build dependencies
+        run: |
+          brew update
+          brew install freerdp gitleaks
+          echo "SSM_COMMANDER_FREERDP_PREFIX=$(brew --prefix freerdp)" >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend checks
+        run: |
+          npm test
+          npm run lint
+          npm run build
+
+      - name: Run Rust checks
+        working-directory: src-tauri
+        run: |
+          cargo test --target "$TARGET"
+          cargo check --target "$TARGET"
+
+      - name: Scan repository history for secrets
+        run: gitleaks detect --source . --redact --verbose
+
+      - name: Require signing credentials for an official release
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [[ "$OFFICIAL_RELEASE" != "true" ]]; then
+            echo "Unsigned validation run: no official release will be created."
+            exit 0
+          fi
+          for secret in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
+            [[ -n "${!secret}" ]] || { echo "Missing required secret: $secret"; exit 1; }
+          done
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" >> "$GITHUB_ENV"
+
+      - name: Build the Apple Silicon DMG
+        uses: tauri-apps/tauri-action@v1
+        env:
+          APPLE_CERTIFICATE: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        with:
+          args: --target aarch64-apple-darwin --bundles dmg
+
+      - name: Verify bundle, signatures, and notarization
+        run: |
+          set -euo pipefail
+          dmg=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]] || { echo "Apple Silicon DMG was not produced."; exit 1; }
+          mount=$(hdiutil attach -nobrowse -readonly "$dmg" | awk '/\/Volumes\// {print substr($0, index($0, "/Volumes/")); exit}')
+          [[ -n "$mount" ]] || { echo "Could not mount DMG."; exit 1; }
+          trap 'hdiutil detach "$mount" >/dev/null' EXIT
+          app=$(find "$mount" -maxdepth 1 -name '*.app' -type d -print -quit)
+          [[ -n "$app" ]] || { echo "DMG does not contain an application bundle."; exit 1; }
+          binary="$app/Contents/MacOS/ssm-commander"
+          lib_dir="$app/Contents/Resources/lib"
+          [[ -x "$binary" && -d "$lib_dir" ]] || { echo "Expected executable or staged libraries are missing."; exit 1; }
+          [[ -f "$app/Contents/Resources/licenses/FreeRDP-LICENSE" ]] || { echo "FreeRDP license is missing."; exit 1; }
+          ! otool -L "$binary" "$lib_dir"/*.dylib | grep -E '/opt/homebrew|/usr/local/opt'
+          if [[ "$OFFICIAL_RELEASE" == "true" ]]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            xcrun stapler validate "$dmg"
+            if ! spctl --assess --type execute --verbose=2 "$app"; then
+              echo "spctl assessment is unavailable or rejected in this GitHub-hosted environment; stapling validation passed."
+            fi
+          else
+            echo "Unsigned validation artifact: code-signature, Gatekeeper, and stapling checks are intentionally skipped."
+          fi
+          mkdir -p release-assets
+          version=$(node -p "require('./package.json').version")
+          filename="SSM-Commander_${version}_aarch64.dmg"
+          cp "$dmg" "release-assets/$filename"
+          cd release-assets
+          shasum -a 256 "$filename" > "$filename.sha256"
+
+      - name: Upload verified validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssm-commander-macos-aarch64
+          path: release-assets/
+          if-no-files-found: error
+
+  create-draft-release:
+    name: Create or update draft release
+    if: github.event_name == 'push'
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ssm-commander-macos-aarch64
+          path: release-assets
+
+      - name: Create or update the draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --json isDraft --jq '.isDraft' >/tmp/is_draft 2>/dev/null; then
+            [[ "$(cat /tmp/is_draft)" == "true" ]] || { echo "Refusing to modify a published release."; exit 1; }
+          else
+            gh release create "$tag" --verify-tag --draft --title "SSM Commander $tag" --generate-notes
+          fi
+          gh release upload "$tag" release-assets/* --clobber

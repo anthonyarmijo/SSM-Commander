@@ -53,15 +53,15 @@ a card is inserted or that the target Windows policy permits redirection.
   separately before relying on it.
 - The first implementation is macOS-first. Windows continues to use the
   Guacamole renderer, with the system RDP client as its external fallback.
-- The native view uses the upstream FreeRDP 3.28 source submodule at
+- The native view uses the pinned upstream FreeRDP source submodule at
   `src-tauri/vendor/freerdp`; update and test it deliberately. During the
   macOS build, SSM Commander creates a local copy of `MRDPView.m` that converts
   mouse positions from window to view coordinates. This small compatibility
   adjustment keeps pointer input accurate when the RDP view starts beside the
   app sidebar; it does not modify the checked-out upstream submodule.
-- For a sandboxed/macOS-App-Store distribution, evaluate Apple’s Smart Card
-  entitlement (`com.apple.security.smartcard`) during signing work. The current
-  direct-distribution build is not presented as App-Store sandboxed.
+- The current 1.1.0 direct-distribution build is not App Store sandboxed. Do
+  not add App Store sandbox or smart-card entitlements to this build without a
+  separately established platform requirement.
 
 ## Development and packaging
 
@@ -74,15 +74,16 @@ git submodule update --init --recursive
 cd src-tauri && cargo check
 ```
 
-Homebrew is discovered at `/opt/homebrew/opt/freerdp` on Apple Silicon and
-`/usr/local/opt/freerdp` on Intel. To use another compatible FreeRDP 3 build,
-set `SSM_COMMANDER_FREERDP_PREFIX` to its prefix; the build and packaging
-staging steps use the same override.
+Homebrew is normally discovered at `/opt/homebrew/opt/freerdp` on Apple Silicon
+and `/usr/local/opt/freerdp` on Intel. To use another compatible FreeRDP 3
+build, set `SSM_COMMANDER_FREERDP_PREFIX`; the build and packaging steps use
+the same override.
 
-The Tauri pre-bundle hook copies FreeRDP and WinPR dylibs to the application’s
+The Tauri pre-bundle hook copies FreeRDP and WinPR dylibs to the application's
 `Resources/lib` directory, rewrites the native executable to load them through
-an app-local `@rpath`, and rejects remaining Homebrew links. Inspect the final
-application with `otool -L` as part of the release checklist.
+an app-local `@rpath`, and rejects remaining Homebrew links. Development
+commands are in [CONTRIBUTING.md](../CONTRIBUTING.md); signing, notarization,
+and DMG checks are in [docs/releasing.md](releasing.md).
 
 ## Validation matrix
 
