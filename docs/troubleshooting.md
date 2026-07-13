@@ -1,104 +1,56 @@
 # Troubleshooting
 
-## Environment Is Blocked
+## Environment is blocked
 
-Run the environment check in Initialize. Required dependencies are AWS CLI v2
-and the Session Manager Plugin. OpenSSH, the bundled terminal PTY, and FreeRDP
-are reported as workflow-specific tools; the legacy Guacamole bridge is not an
-Environment requirement.
+The required end-user dependencies are AWS CLI v2 and the Session Manager
+plugin. Use the Initialize page to inspect the active profile and local tools.
+Packaged macOS DMGs bundle their FreeRDP libraries; installing Homebrew FreeRDP
+is only necessary for a source build.
 
-## Profile Validation Fails
+## Profile validation fails
 
-The Initialize page discovers profiles by reading the standard AWS shared files
-directly: `~/.aws/config` and `~/.aws/credentials`. On macOS, packaged builds
-also look for AWS CLI tools in common Homebrew and system locations so launching
-the app from Finder or `open` does not require modifying your shell startup
-files.
-
-Try:
+Confirm the selected profile can authenticate:
 
 ```sh
 aws sts get-caller-identity --profile your-profile
-```
-
-For SSO profiles, refresh login:
-
-```sh
 aws sso login --profile your-profile
 ```
 
-## Instances Do Not Appear
+SSM Commander reads the standard AWS shared files directly. Ensure the profile,
+region, and expected SSO session are configured there.
 
-Confirm the selected profile and region can list EC2 instances:
+## Instances are missing or not ready
+
+Verify that the profile can list the selected region and that the instance is a
+managed node with a running SSM Agent:
 
 ```sh
 aws ec2 describe-instances --profile your-profile --region us-west-2 --output json
 ```
 
-The Instances view lists pending, running, stopping, and stopped instances.
+The identity and instance role need the permissions required by Session Manager.
 
-## SSM Is Not Ready
+## Embedded RDP does not open
 
-The instance must be a managed node, the SSM Agent must be running, and IAM permissions must allow Session Manager access. The app checks `describe-instance-information` and labels instances as ready, offline, or not managed.
+On macOS, native FreeRDP connects directly to the local SSM tunnel. Check the
+Windows RDP service, tunnel, username, password, domain, and selected RDP
+security mode. The Console reports a native FreeRDP error code on disconnect.
+Close and reopen the console to negotiate a different initial resolution.
 
-## Embedded RDP Does Not Open
+On Windows, embedded RDP is the legacy Guacamole renderer. Its `npm start`
+development workflow requires Docker Desktop and manages `guacd` locally. Raw
+`npm run tauri:dev` leaves that bridge under your control. See
+[dependency setup](dependency-setup.md) for development requirements.
 
-On macOS, embedded RDP uses the native FreeRDP view directly against the local
-SSM tunnel. Confirm that the Windows RDP service is reachable through the
-tunnel, then check the username, password, domain, and selected RDP security
-mode. A native error code is shown in the Console tab when FreeRDP disconnects.
+## Credential vault does not unlock
 
-For a local macOS development build, install FreeRDP 3 and initialize the
-source submodule:
+The vault needs the original master passphrase and cannot recover a lost one.
+Deleting a vault from app data discards its saved SSH/RDP connection details;
+do so only when you are prepared to recreate them. Locking the vault clears
+edited secrets from renderer state.
 
-```sh
-brew install freerdp
-git submodule update --init --recursive
-```
+## Tunnels keep running
 
-The initial remote desktop size is selected from the visible console pane and
-the view smart-scales after window resizes. Close and reopen the console to
-negotiate a different Windows desktop resolution.
-
-On Windows, embedded RDP remains the legacy Guacamole implementation and needs
-`guacd`. The normal development workflow is:
-
-```sh
-npm start
-```
-
-That command requires Docker Desktop. To manage the bridge manually:
-
-```sh
-docker run --rm --name ssm-commander-guacd \
-  -p 127.0.0.1:4822:4822 \
-  guacamole/guacd
-```
-
-For domain-joined Windows hosts, enter credentials with the Windows domain prefix,
-for example `EXAMPLE\admin`. The Windows legacy renderer separates that into
-its `domain` and `username` parameters; macOS passes equivalent native FreeRDP
-settings. The Instances page also includes an RDP security selector with Auto,
-NLA, NLA-Ext, TLS, and RDP options.
-
-## Credential Vault Does Not Unlock
-
-The credential vault requires the same master passphrase used when it was created. New vaults require a stronger passphrase. SSM Commander cannot recover a lost vault passphrase; delete the local vault from your app data directory only if you are prepared to recreate saved SSH/RDP credentials.
-
-When the vault is locked, saved credential options are unavailable and console launches fall back to manual entry. Locking the vault or leaving the Credentials view clears edited credential secrets from renderer state.
-
-## Raw Tauri Dev Mode
-
-Use raw Tauri dev mode when you want to manage the Windows legacy `guacd`
-bridge yourself:
-
-```sh
-npm run tauri:dev
-```
-
-On macOS this starts the native FreeRDP renderer directly. On Windows it does
-not start or stop the Guacamole container.
-
-## Tunnels Keep Running
-
-Use Stop in the SSM Activity panel. On app shutdown, owned SSM tunnel processes and embedded Console sessions are terminated. Shell sessions launched in an external terminal must be closed from that terminal.
+Use Stop in SSM Activity. Application shutdown stops owned SSM tunnel processes
+and embedded console sessions. Shell sessions opened in an external terminal
+must be closed from that terminal.

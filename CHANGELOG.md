@@ -2,7 +2,9 @@
 
 All notable changes to SSM Commander are tracked here.
 
-## Unreleased
+## [Unreleased]
+
+## [1.1.0] - 2026-07-10
 
 ### 2026-07-09
 
@@ -18,6 +20,9 @@ All notable changes to SSM Commander are tracked here.
 - Refresh the workspace UI and simplify Initialize: compact readiness summary,
   clearer local-tool status, and no obsolete Guacamole bridge environment check.
 - Add macOS native RDP/PIV-CAC setup and validation documentation.
+
+- Stabilize the legacy Windows embedded-RDP startup path after dynamic resize
+  regressions, while preserving native macOS FreeRDP as the macOS renderer.
 
 ### 2026-05-13
 

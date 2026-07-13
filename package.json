@@ -1,6 +1,6 @@
 {
   "name": "ssm-commander",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SSM Commander desktop app for AWS Systems Manager access",
   "private": true,
   "license": "MIT",

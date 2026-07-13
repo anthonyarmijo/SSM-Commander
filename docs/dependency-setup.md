@@ -1,111 +1,16 @@
 # Dependency Setup
 
-SSM Commander depends on the existing AWS tooling rather than replacing it. That keeps profile, SSO, and AWS credential behavior aligned with the AWS CLI you already use.
+SSM Commander uses your existing AWS CLI configuration. It does not create or
+store AWS access keys.
 
-## macOS
+## End-user requirements
 
-Required:
+On macOS and Windows, install:
 
-- AWS CLI v2
-- AWS Session Manager Plugin
-- OpenSSH for embedded SSH console tabs
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+- [AWS Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
 
-Recommended:
-
-- FreeRDP 3 for the native embedded macOS RDP renderer
-
-Example Homebrew installs:
-
-```sh
-brew install awscli
-brew install --cask session-manager-plugin
-brew install freerdp
-```
-
-macOS embedded RDP uses the upstream FreeRDP Mac view and connects directly to
-the loopback port created by the SSM tunnel. It does not need `guacd`. Install
-FreeRDP and initialize the pinned source submodule before building:
-
-```sh
-brew install freerdp
-git submodule update --init --recursive
-```
-
-On macOS, `npm start` launches the native renderer without Docker or `guacd`:
-
-```sh
-npm start
-```
-
-To package the native renderer for Apple Silicon, install FreeRDP first:
-
-```sh
-brew install freerdp
-```
-
-Then run:
-
-```sh
-npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
-```
-
-Tauri invokes `scripts/stage-freerdp-macos.mjs` immediately before bundling.
-It copies the FreeRDP/WinPR dependency closure into
-`src-tauri/resources/macos/lib/`, rewrites the release executable to use that
-app-local library path, and fails if it finds a remaining Homebrew link. You
-can run `npm run stage:freerdp:macos` manually after `cargo build --release` to
-inspect the staging step in isolation.
-
-For smart-card setup and release-validation requirements, read
-[macOS Native RDP and PIV/CAC Redirection](macos-native-rdp-smartcard.md).
-
-Use environment variables for Apple signing and notarization secrets. Do not
-commit certificates, private keys, app-specific passwords, or API keys. Tauri
-uses `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`,
-`APPLE_CERTIFICATE_PASSWORD`, and either App Store Connect API variables
-`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` or Apple ID variables
-`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
-
-Development builds also require Rust:
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Frontend development also requires Node.js and npm.
-
-## Windows
-
-Required:
-
-- AWS CLI v2
-- AWS Session Manager Plugin
-
-Recommended:
-
-- Windows OpenSSH client
-- Remote Desktop Client (`mstsc.exe`) for external RDP fallback
-- Windows Terminal or PowerShell for external terminal fallback
-
-Development builds also require Rust from <https://rustup.rs/>.
-
-Windows continues to use the legacy Guacamole renderer for embedded RDP. Its
-`npm start` workflow requires Docker Desktop and starts `guacd` on
-`127.0.0.1:4822` for the duration of the development session. To manage it
-manually instead, run:
-
-```sh
-docker run --rm --name ssm-commander-guacd \
-  -p 127.0.0.1:4822:4822 \
-  guacamole/guacd
-```
-
-Set `SSM_COMMANDER_GUACD_RDP_HOST` only when that bridge runs outside the host
-network namespace and needs a different route to local SSM tunnel ports.
-
-## AWS Profile Setup
-
-The app expects profiles to already be configured through AWS CLI files or SSO:
+Configure a profile before opening the app:
 
 ```sh
 aws configure sso
@@ -113,13 +18,62 @@ aws sso login --profile your-profile
 aws sts get-caller-identity --profile your-profile
 ```
 
-The app can validate profiles and report clear errors, but it does not replace IAM, SSO, or Session Manager account configuration.
-Packaged macOS builds discover profiles by reading `~/.aws/config` and
-`~/.aws/credentials` directly, then use standard Homebrew and system tool
-locations for remaining CLI-backed workflows.
+Released macOS DMGs bundle the FreeRDP and WinPR libraries used by the native
+embedded RDP renderer. End users do not need Homebrew or FreeRDP merely to run
+the DMG. Packaged macOS builds discover standard AWS shared files
+(`~/.aws/config` and `~/.aws/credentials`) and common tool locations when
+started from Finder.
 
-## Local Credential Vault
+Optional workflow dependencies:
 
-SSM Commander v1.0 can save optional SSH and RDP connection details in an encrypted local vault. The vault is separate from AWS credentials, requires a master passphrase to unlock, and is intended only for connection details used by embedded console sessions.
+- OpenSSH for embedded SSH sessions.
+- A reachable Windows host with Remote Desktop enabled for RDP sessions.
+- A local smart-card reader and middleware when using opt-in macOS PIV/CAC
+  redirection inside an established RDP session.
 
-Saved credential secrets are resolved by the Tauri backend when a console session starts. They are not written to preferences, diagnostics, or release fixtures. Manually entered SSH/RDP passwords and pasted private keys are treated as session-only values.
+## Source-build requirements
+
+All source builds need a supported Node.js release, npm, and Rust stable. Start
+with the pinned native RDP source:
+
+```sh
+git submodule update --init --recursive
+npm ci
+```
+
+### macOS
+
+macOS source builds require Homebrew and FreeRDP 3 headers/libraries:
+
+```sh
+brew install freerdp
+npm start
+```
+
+The native renderer connects directly through the local SSM tunnel; it does not
+need `guacd`. To use another compatible FreeRDP prefix, set
+`SSM_COMMANDER_FREERDP_PREFIX`. See [CONTRIBUTING.md](../CONTRIBUTING.md) for
+development validation and [the macOS RDP guide](macos-native-rdp-smartcard.md)
+for card behavior and limitations.
+
+### Windows
+
+Windows source builds require Rust and normally use Docker Desktop for the
+legacy Guacamole embedded-RDP development bridge:
+
+```sh
+npm start
+```
+
+The workflow starts `guacd` on `127.0.0.1:4822` only for the development
+session. Windows users can also use the system Remote Desktop Client as an
+external fallback. Set `SSM_COMMANDER_GUACD_RDP_HOST` only when a manually
+managed bridge needs a different route to local SSM tunnel ports.
+
+## Credential vault
+
+The optional local vault encrypts saved SSH/RDP connection details with a
+master passphrase. It is separate from AWS credentials. Saved secrets are
+resolved in the Tauri backend for console launch; manually entered passwords
+and pasted keys are session-only. Do not export vault files, private keys, or
+real connection details into tickets, screenshots, or fixtures.
