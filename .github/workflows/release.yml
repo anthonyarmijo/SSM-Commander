@@ -83,6 +83,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Prepare macOS bundle resources
+        run: |
+          mkdir -p src-tauri/resources/macos/lib
+          touch src-tauri/resources/macos/lib/ci-placeholder
+
       - name: Run frontend checks
         run: |
           npm test
