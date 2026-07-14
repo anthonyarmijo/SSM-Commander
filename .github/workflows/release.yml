@@ -139,6 +139,23 @@ jobs:
         with:
           args: --target aarch64-apple-darwin --bundles dmg
 
+      - name: Notarize and staple the final DMG
+        if: env.OFFICIAL_RELEASE == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          dmg=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]] || { echo "Apple Silicon DMG was not produced."; exit 1; }
+          hdiutil verify "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+
       - name: Verify bundle, signatures, and notarization
         run: |
           set -euo pipefail
