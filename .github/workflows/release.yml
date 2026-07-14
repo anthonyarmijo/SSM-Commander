@@ -122,11 +122,16 @@ jobs:
           printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" >> "$GITHUB_ENV"
 
+      - name: Import Apple signing certificate
+        if: env.OFFICIAL_RELEASE == 'true'
+        uses: Apple-Actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       - name: Build the Apple Silicon DMG
         uses: tauri-apps/tauri-action@v1
         env:
-          APPLE_CERTIFICATE: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_API_ISSUER: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_API_ISSUER || '' }}
           APPLE_API_KEY: ${{ (github.event_name == 'push' || inputs.notarize == true) && secrets.APPLE_API_KEY || '' }}
