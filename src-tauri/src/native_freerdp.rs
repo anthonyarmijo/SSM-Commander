@@ -272,6 +272,13 @@ pub use macos::{
 pub struct NativeRdpManager;
 
 #[cfg(not(target_os = "macos"))]
+impl NativeRdpManager {
+    pub fn remove(&self, _app: &tauri::AppHandle, _session_id: &str) {}
+
+    pub fn clear(&self, _app: &tauri::AppHandle) {}
+}
+
+#[cfg(not(target_os = "macos"))]
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeRdpConnectionStatus {

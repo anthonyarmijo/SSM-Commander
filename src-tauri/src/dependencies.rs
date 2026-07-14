@@ -1,5 +1,6 @@
 use crate::aws_cli;
 use crate::models::{DependencyCheck, DependencyStatus, EnvironmentState, EnvironmentStatus};
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::process::Command;
 
