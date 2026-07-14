@@ -69,6 +69,15 @@ function stagedName(dependency) {
   return path.basename(fs.realpathSync(dependency));
 }
 
+function signStagedLibrary(destination) {
+  const identity = process.env.APPLE_SIGNING_IDENTITY?.trim();
+  const args = identity
+    ? ["--force", "--options", "runtime", "--timestamp", "--sign", identity, destination]
+    : ["--force", "--sign", "-", destination];
+  run("codesign", args);
+  run("codesign", ["--verify", "--strict", "--verbose=2", destination]);
+}
+
 function rewriteStagedLibraries(libraries) {
   for (const [source, destination] of libraries) {
     run("install_name_tool", ["-id", `@rpath/${path.basename(source)}`, destination]);
@@ -77,7 +86,7 @@ function rewriteStagedLibraries(libraries) {
         run("install_name_tool", ["-change", dependency, `@loader_path/${stagedName(dependency)}`, destination]);
       }
     }
-    run("codesign", ["--force", "--sign", "-", destination]);
+    signStagedLibrary(destination);
   }
 }
 
