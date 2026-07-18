@@ -379,6 +379,7 @@ pub struct UserPreferences {
     pub instance_browser_width: Option<u16>,
     pub instance_table_visible_columns: Option<Vec<String>>,
     pub instance_table_column_widths: Option<std::collections::HashMap<String, u16>>,
+    pub last_instance_credential_ids: Option<std::collections::HashMap<String, String>>,
     pub profile_validation_cache:
         Option<std::collections::HashMap<String, CachedProfileValidation>>,
 }

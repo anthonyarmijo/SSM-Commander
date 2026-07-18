@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASCII_TERRARIUM, isInitializationGatedView, navItems } from "./navigation";
+import { isInitializationGatedView, navItems, SSM_FIGLET } from "./navigation";
 
 describe("navigation", () => {
   it("uses the SSM Commander workspace order", () => {
@@ -14,10 +14,9 @@ describe("navigation", () => {
     ]);
   });
 
-  it("provides the animated ASCII terrarium content", () => {
-    expect(ASCII_TERRARIUM.cloud.join("\n")).toContain("~~~~");
-    expect(ASCII_TERRARIUM.server.join("\n")).toContain("::::::");
-    expect(ASCII_TERRARIUM.laptop.join("\n")).toContain(">_");
+  it("provides the Big Signal SSM banner", () => {
+    expect(SSM_FIGLET.split("\n")).toHaveLength(6);
+    expect(SSM_FIGLET).toContain("███╗");
   });
 
   it("gates workspace views that require initialization", () => {

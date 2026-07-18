@@ -127,6 +127,14 @@ impl CredentialStore {
         self.set_default_at(&path, kind, credential_id)
     }
 
+    pub fn reorder(
+        &mut self,
+        credential_ids: Vec<String>,
+    ) -> Result<Vec<CredentialSummary>, String> {
+        let path = credentials_path()?;
+        self.reorder_at(&path, credential_ids)
+    }
+
     fn status_at(&self, path: &Path) -> Result<CredentialStoreStatus, String> {
         let vault = self.vault.as_ref();
         Ok(CredentialStoreStatus {
@@ -242,6 +250,40 @@ impl CredentialStore {
         self.status_at(path)
     }
 
+    fn reorder_at(
+        &mut self,
+        path: &Path,
+        credential_ids: Vec<String>,
+    ) -> Result<Vec<CredentialSummary>, String> {
+        let vault = self.unlocked_vault_mut()?;
+        let is_exact_order = credential_ids.len() == vault.credentials.len()
+            && vault.credentials.iter().all(|credential| {
+                credential_ids
+                    .iter()
+                    .filter(|id| *id == &credential.id)
+                    .count()
+                    == 1
+            });
+        if !is_exact_order {
+            return Err(
+                "Credential order must contain every saved credential exactly once.".to_string(),
+            );
+        }
+
+        let mut remaining = std::mem::take(&mut vault.credentials);
+        let mut reordered = Vec::with_capacity(remaining.len());
+        for credential_id in credential_ids {
+            let index = remaining
+                .iter()
+                .position(|credential| credential.id == credential_id)
+                .expect("credential order was validated");
+            reordered.push(remaining.remove(index));
+        }
+        vault.credentials = reordered;
+        self.save_at(path)?;
+        self.list()
+    }
+
     fn get_summary(&self, credential_id: &str) -> Result<CredentialSummary, String> {
         self.unlocked_vault()?
             .summaries()
@@ -281,8 +323,7 @@ impl CredentialStore {
 
 impl CredentialVault {
     fn summaries(&self) -> Vec<CredentialSummary> {
-        let mut summaries = self
-            .credentials
+        self.credentials
             .iter()
             .map(|credential| CredentialSummary {
                 id: credential.id.clone(),
@@ -302,9 +343,7 @@ impl CredentialVault {
                 },
                 updated_at: credential.updated_at.clone(),
             })
-            .collect::<Vec<_>>();
-        summaries.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
-        summaries
+            .collect()
     }
 
     fn clear_invalid_defaults(&mut self) {
@@ -744,6 +783,61 @@ mod tests {
             Some(summary.id.as_str())
         );
         assert_eq!(store.list().unwrap()[0].is_default, true);
+    }
+
+    #[test]
+    fn persists_explicit_credential_order() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let mut store = CredentialStore::default();
+
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
+        let alpha = store
+            .upsert_at(&path, ssh_password_request("Alpha", "alpha-password"))
+            .unwrap();
+        let bravo = store
+            .upsert_at(&path, ssh_password_request("Bravo", "bravo-password"))
+            .unwrap();
+
+        let reordered = store
+            .reorder_at(&path, vec![bravo.id.clone(), alpha.id.clone()])
+            .unwrap();
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|credential| &credential.id)
+                .collect::<Vec<_>>(),
+            vec![&bravo.id, &alpha.id]
+        );
+
+        store.lock();
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
+        assert_eq!(
+            store
+                .list()
+                .unwrap()
+                .iter()
+                .map(|credential| &credential.id)
+                .collect::<Vec<_>>(),
+            vec![&bravo.id, &alpha.id]
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_credential_orders() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let mut store = CredentialStore::default();
+
+        store.unlock_at(&path, "Correct horse 42!").unwrap();
+        let alpha = store
+            .upsert_at(&path, ssh_password_request("Alpha", "alpha-password"))
+            .unwrap();
+        store
+            .upsert_at(&path, ssh_password_request("Bravo", "bravo-password"))
+            .unwrap();
+
+        assert!(store.reorder_at(&path, vec![alpha.id]).is_err());
     }
 
     #[test]

@@ -245,6 +245,7 @@ export interface UserPreferences {
   instanceBrowserWidth?: number | null;
   instanceTableVisibleColumns?: string[] | null;
   instanceTableColumnWidths?: Record<string, number> | null;
+  lastInstanceCredentialIds?: Record<string, string> | null;
   profileValidationCache?: Record<string, CachedProfileValidation> | null;
 }
 

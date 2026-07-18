@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -16,12 +17,19 @@ import { message as dialogMessage, open as openDialog } from "@tauri-apps/plugin
 import Guacamole from "guacamole-common-js";
 import "@xterm/xterm/css/xterm.css";
 import { StatusPill } from "../components/StatusPill";
-import { filterInstances } from "../features/instances/filters";
+import { filterInstances, type InstanceStateFilter } from "../features/instances/filters";
 import { defaultConnectionKindForInstance } from "../features/instances/connectionDefaults";
 import {
+  rememberedInstanceCredentialId,
+  rememberInstanceCredential,
   matchingCredentials,
-  selectDefaultCredentialId,
 } from "../features/instances/credentialDefaults";
+import {
+  filterCredentials,
+  moveCredentialByOffset,
+  moveCredentialToTarget,
+  type CredentialKindFilter,
+} from "../features/credentials/list";
 import {
   getInstancePowerSelection,
   normalizeInstanceSelection,
@@ -62,7 +70,7 @@ import { clearCredentialFormSecrets, emptyCredentialForm, type CredentialFormSta
 import { DEFAULT_RDP_DISPLAY_SIZE, getBrowserRdpConsolePaneSize, measuredRdpDisplaySize, type RdpDisplaySize } from "./rdpDisplaySize";
 import { buildPortForwardInvokeArgs, validateTunnelForm } from "./tunnelForm";
 import { getBrowserPreviewConfig, invokeCommand, isTauriRuntime, openExternalUrl } from "../lib/tauri";
-import { ASCII_TERRARIUM, isInitializationGatedView, navItems, type ActiveView } from "./navigation";
+import { isInitializationGatedView, navItems, SSM_FIGLET, type ActiveView } from "./navigation";
 import type {
   AwsProfile,
   CapabilityStatus,
@@ -256,6 +264,35 @@ function EditIcon() {
   );
 }
 
+function GripIcon() {
+  return (
+    <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M5 7h14M5 12h14M5 17h14" />
+    </svg>
+  );
+}
+
+function CredentialKindBadge({ kind }: { kind: CredentialKind }) {
+  return (
+    <span className={`credential-kind-badge credential-kind-badge--${kind}`}>
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        {kind === "rdp" ? (
+          <>
+            <rect height="12" rx="2" width="18" x="3" y="4" />
+            <path d="M8 20h8M12 16v4" />
+          </>
+        ) : (
+          <>
+            <rect height="16" rx="2" width="18" x="3" y="4" />
+            <path d="m7 9 3 3-3 3M13 15h4" />
+          </>
+        )}
+      </svg>
+      {credentialKindLabel(kind)}
+    </span>
+  );
+}
+
 function ChevronDownIcon() {
   return (
     <svg aria-hidden="true" className="button-icon" fill="none" viewBox="0 0 24 24">
@@ -310,8 +347,8 @@ function NavIcon({ view }: { view: ActiveView }) {
       )}
       {view === "console" && (
         <>
-          <rect height="14" rx="2" width="18" x="3" y="5" />
-          <path d="m8 10 3 2-3 2M13 15h4" />
+          <rect height="12" rx="2" width="18" x="3" y="4" />
+          <path d="M8 20h8M12 16v4" />
         </>
       )}
       {view === "activity" && (
@@ -529,12 +566,16 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEvent[]>([]);
   const [logsCopyStatus, setLogsCopyStatus] = useState("");
   const [query, setQuery] = useState("");
+  const [instanceStateFilter, setInstanceStateFilter] = useState<InstanceStateFilter>("running");
   const [sshUser, setSshUser] = useState("ec2-user");
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState("");
   const [sshPrivateKeyContent, setSshPrivateKeyContent] = useState("");
   const [credentialStatus, setCredentialStatus] = useState<CredentialStoreStatus | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
+  const [credentialQuery, setCredentialQuery] = useState("");
+  const [credentialKindFilter, setCredentialKindFilter] = useState<CredentialKindFilter>("all");
+  const [draggedCredentialId, setDraggedCredentialId] = useState("");
   const [credentialPassphrase, setCredentialPassphrase] = useState("");
   const [credentialNotice, setCredentialNotice] = useState("");
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
@@ -586,8 +627,15 @@ export function App() {
   const activeConsoleSession =
     consoleSessions.find((session) => session.id === activeConsoleSessionId) ?? consoleSessions[0] ?? null;
   const selectedInstanceIdSet = useMemo(() => new Set(selectedInstanceIds), [selectedInstanceIds]);
-  const filteredInstances = useMemo(() => filterInstances(instances, query), [instances, query]);
+  const filteredInstances = useMemo(
+    () => filterInstances(instances, query, instanceStateFilter),
+    [instanceStateFilter, instances, query],
+  );
   const visibleInstances = useMemo(() => sortInstances(filteredInstances, instanceSort), [filteredInstances, instanceSort]);
+  const visibleCredentials = useMemo(
+    () => filterCredentials(credentials, credentialQuery, credentialKindFilter),
+    [credentialKindFilter, credentialQuery, credentials],
+  );
   const sshCredentials = useMemo(() => matchingCredentials(credentials, "ssh"), [credentials]);
   const rdpCredentials = useMemo(() => matchingCredentials(credentials, "rdp"), [credentials]);
   const instanceCredentialKind: CredentialKind | null = instanceConnectionKind === "ssh" || instanceConnectionKind === "rdp"
@@ -597,6 +645,15 @@ export function App() {
   const selectedInstanceCredentialId = instanceCredentialKind === "ssh"
     ? selectedSshCredentialId
     : instanceCredentialKind === "rdp"
+      ? selectedRdpCredentialId
+      : "";
+  const consoleCredentialKind: CredentialKind | null = consoleSessionKind === "ssh" || consoleSessionKind === "rdp"
+    ? consoleSessionKind
+    : null;
+  const consoleCredentialOptions = consoleCredentialKind === "ssh" ? sshCredentials : consoleCredentialKind === "rdp" ? rdpCredentials : [];
+  const selectedConsoleCredentialId = consoleCredentialKind === "ssh"
+    ? selectedSshCredentialId
+    : consoleCredentialKind === "rdp"
       ? selectedRdpCredentialId
       : "";
   const runningInstances = useMemo(
@@ -880,8 +937,8 @@ export function App() {
     if (status.unlocked) {
       const summaries = await invokeCommand<CredentialSummary[]>("list_credentials");
       setCredentials(summaries);
-      setSelectedSshCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "ssh"));
-      setSelectedRdpCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "rdp"));
+      setSelectedSshCredentialId((current) => summaries.some((credential) => credential.id === current && credential.kind === "ssh") ? current : "");
+      setSelectedRdpCredentialId((current) => summaries.some((credential) => credential.id === current && credential.kind === "rdp") ? current : "");
     } else {
       setCredentials([]);
       setSelectedSshCredentialId("");
@@ -896,8 +953,20 @@ export function App() {
       const summaries = await invokeCommand<CredentialSummary[]>("list_credentials");
       setCredentialStatus(status);
       setCredentials(summaries);
-      setSelectedSshCredentialId(selectDefaultCredentialId(summaries, status, "ssh"));
-      setSelectedRdpCredentialId(selectDefaultCredentialId(summaries, status, "rdp"));
+      setSelectedSshCredentialId("");
+      setSelectedRdpCredentialId("");
+      if (selectedInstance) {
+        const kind = defaultConnectionKindForInstance(selectedInstance);
+        const rememberedId = rememberedInstanceCredentialId(
+          preferencesRef.current.lastInstanceCredentialIds,
+          summaries,
+          activeProfile,
+          activeProfileRegion,
+          selectedInstance.instanceId,
+          kind,
+        );
+        applyCredentialToConnection(kind, rememberedId, summaries);
+      }
       setCredentialPassphrase("");
       setCredentialNotice(hadCredentialStore ? "Credentials unlocked." : "Credentials vault created.");
     } catch (error) {
@@ -925,8 +994,8 @@ export function App() {
     ]);
     setCredentialStatus(status);
     setCredentials(summaries);
-    setSelectedSshCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "ssh"));
-    setSelectedRdpCredentialId((current) => current || selectDefaultCredentialId(summaries, status, "rdp"));
+    setSelectedSshCredentialId((current) => summaries.some((credential) => credential.id === current && credential.kind === "ssh") ? current : "");
+    setSelectedRdpCredentialId((current) => summaries.some((credential) => credential.id === current && credential.kind === "rdp") ? current : "");
   }
 
   function buildCredentialRequest(): UpsertCredentialRequest {
@@ -1008,11 +1077,6 @@ export function App() {
         credentialId: credentialId || null,
       });
       setCredentialStatus(status);
-      if (kind === "ssh") {
-        setSelectedSshCredentialId(credentialId);
-      } else {
-        setSelectedRdpCredentialId(credentialId);
-      }
       await refreshCredentialSummaries();
       setCredentialNotice(credentialId ? `Default ${credentialKindLabel(kind)} credential updated.` : `Default ${credentialKindLabel(kind)} credential cleared.`);
     } catch (error) {
@@ -1020,7 +1084,11 @@ export function App() {
     }
   }
 
-  async function applyCredentialToConnection(kind: CredentialKind, credentialId: string) {
+  function applyCredentialToConnection(
+    kind: CredentialKind,
+    credentialId: string,
+    availableCredentials = credentials,
+  ) {
     if (kind === "ssh") {
       setSelectedSshCredentialId(credentialId);
       setSshPassword("");
@@ -1032,7 +1100,7 @@ export function App() {
     }
     if (!credentialId) return;
 
-    const credential = credentials.find((candidate) => candidate.id === credentialId);
+    const credential = availableCredentials.find((candidate) => candidate.id === credentialId);
     if (!credential || credential.kind !== kind) {
       setNotice("Selected credential is unavailable. Unlock credentials and try again.");
       return;
@@ -1045,6 +1113,90 @@ export function App() {
       setRdpDomain(credential.domain || "");
       setRdpSecurityMode((credential.rdpSecurityMode as RdpSecurityMode | null) || "auto");
     }
+  }
+
+  function getRememberedCredentialId(instanceId: string, kind: CredentialKind): string {
+    return rememberedInstanceCredentialId(
+      preferencesRef.current.lastInstanceCredentialIds,
+      credentials,
+      activeProfile,
+      activeProfileRegion,
+      instanceId,
+      kind,
+    );
+  }
+
+  function applyRememberedCredentialToConnection(instanceId: string, kind: CredentialKind) {
+    applyCredentialToConnection(kind, getRememberedCredentialId(instanceId, kind));
+  }
+
+  async function selectCredentialForInstance(kind: CredentialKind, credentialId: string, instanceId: string) {
+    applyCredentialToConnection(kind, credentialId);
+    if (!credentialId || !activeProfile || !activeProfileRegion || !instanceId) return;
+    await savePreferencesPatch({
+      lastInstanceCredentialIds: rememberInstanceCredential(
+        preferencesRef.current.lastInstanceCredentialIds,
+        activeProfile,
+        activeProfileRegion,
+        instanceId,
+        kind,
+        credentialId,
+      ),
+    });
+  }
+
+  function changeInstanceConnectionKind(kind: ConsoleSessionKind) {
+    setInstanceConnectionKind(kind);
+    if (selectedInstance && (kind === "ssh" || kind === "rdp")) {
+      applyRememberedCredentialToConnection(selectedInstance.instanceId, kind);
+    }
+  }
+
+  function changeConsoleSessionKind(kind: ConsoleSessionKind) {
+    setConsoleSessionKind(kind);
+    if (consoleInstanceId && (kind === "ssh" || kind === "rdp")) {
+      applyRememberedCredentialToConnection(consoleInstanceId, kind);
+    }
+  }
+
+  function setConsoleInstanceWithDefaults(instanceId: string) {
+    setConsoleInstanceId(instanceId);
+    const instance = instances.find((candidate) => candidate.instanceId === instanceId);
+    if (!instance) {
+      if (consoleSessionKind === "ssh" || consoleSessionKind === "rdp") {
+        applyCredentialToConnection(consoleSessionKind, "");
+      }
+      return;
+    }
+    const kind = defaultConnectionKindForInstance(instance);
+    setConsoleSessionKind(kind);
+    applyRememberedCredentialToConnection(instanceId, kind);
+  }
+
+  async function persistCredentialOrder(nextCredentials: CredentialSummary[]) {
+    if (nextCredentials === credentials) return;
+    setCredentials(nextCredentials);
+    try {
+      const persisted = await invokeCommand<CredentialSummary[]>("reorder_credentials", {
+        credentialIds: nextCredentials.map((credential) => credential.id),
+      });
+      setCredentials(persisted.length === nextCredentials.length ? persisted : nextCredentials);
+      setCredentialNotice("Credential order updated.");
+    } catch (error) {
+      await refreshCredentialSummaries();
+      setCredentialNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleCredentialDrop(event: ReactDragEvent<HTMLDivElement>, targetId: string) {
+    event.preventDefault();
+    const sourceId = draggedCredentialId || event.dataTransfer.getData("text/plain");
+    setDraggedCredentialId("");
+    void persistCredentialOrder(moveCredentialToTarget(credentials, sourceId, targetId));
+  }
+
+  function reorderCredentialByKeyboard(credentialId: string, offset: -1 | 1) {
+    void persistCredentialOrder(moveCredentialByOffset(credentials, credentialId, offset));
   }
 
   async function checkEnvironment() {
@@ -1435,8 +1587,9 @@ export function App() {
       });
       if (instancesRequestIdRef.current !== requestId) return;
       setInstances(refreshed);
+      const refreshedVisibleInstances = filterInstances(refreshed, query, instanceStateFilter);
       const normalizedSelection = normalizeInstanceSelection(
-        refreshed,
+        refreshedVisibleInstances,
         selectionOverride?.selectedInstanceIds ?? selectedInstanceIds,
         selectionOverride?.primarySelectedInstanceId ?? selectedInstanceId,
         selectionOverride?.anchorInstanceId ?? selectionAnchorId,
@@ -1852,12 +2005,10 @@ export function App() {
   function showInstanceActionsOverlay() {
     if (!selectedInstance || !selectedInstanceActionsKey) return;
     const defaultKind = defaultConnectionKindForInstance(selectedInstance);
-    const defaultCredentialId = selectDefaultCredentialId(credentials, credentialStatus, defaultKind === "ssh" ? "ssh" : "rdp");
+    const defaultCredentialId = getRememberedCredentialId(selectedInstance.instanceId, defaultKind === "ssh" ? "ssh" : "rdp");
     setInstanceConnectionKind(defaultKind);
     setActiveInstanceActionsSelectionKey(selectedInstanceActionsKey);
-    if (defaultCredentialId) {
-      void applyCredentialToConnection(defaultKind === "ssh" ? "ssh" : "rdp", defaultCredentialId);
-    }
+    applyCredentialToConnection(defaultKind, defaultCredentialId);
   }
 
   function dismissInstanceActionsOverlay() {
@@ -1892,6 +2043,21 @@ export function App() {
       setInstanceSort(null);
     }
   }, [instanceSort, instanceTableVisibleColumns]);
+
+  useEffect(() => {
+    if (!selectedInstance) return;
+    const defaultKind = defaultConnectionKindForInstance(selectedInstance);
+    setInstanceConnectionKind(defaultKind);
+    applyRememberedCredentialToConnection(selectedInstance.instanceId, defaultKind);
+  }, [currentAwsContextKey, selectedInstanceId]);
+
+  useEffect(() => {
+    if (visibleInstances.some((instance) => instance.instanceId === selectedInstanceId)) return;
+    const nextInstanceId = visibleInstances[0]?.instanceId ?? "";
+    setSelectedInstanceId(nextInstanceId);
+    setSelectedInstanceIds(nextInstanceId ? [nextInstanceId] : []);
+    setSelectionAnchorId(nextInstanceId);
+  }, [instanceStateFilter, query, visibleInstances]);
 
   useEffect(() => {
     function clampBrowserPaneToViewport() {
@@ -2215,7 +2381,10 @@ export function App() {
                 type="button"
               >
                 <NavIcon view={item.view} />
-                <span>{item.label}</span>
+                <span className="side-nav__label">
+                  {item.label}
+                  {item.view === "console" && <small>(SSH/RDP)</small>}
+                </span>
               </button>
             );
           })}
@@ -2261,27 +2430,33 @@ export function App() {
         {activeView === "home" && (
           <section className="view view--home-brand" aria-labelledby="home-title">
             <div className={`home-splash ${isHomeAsciiArmed ? "home-splash--armed" : ""}`.trim()}>
-              <div className="living-cloud" aria-hidden="true">
-                <span className="living-cloud__spark living-cloud__spark--one">+</span>
-                <span className="living-cloud__spark living-cloud__spark--two">*</span>
-                <span className="living-cloud__spark living-cloud__spark--three">·</span>
-                <span className="living-cloud__spark living-cloud__spark--four">+</span>
-                <pre className="living-cloud__mascot">{ASCII_TERRARIUM.cloud.join("\n")}</pre>
-                <div className="living-cloud__link">
-                  <span className="living-cloud__packet living-cloud__packet--one">■</span>
-                  <span>┆</span>
-                  <span className="living-cloud__packet living-cloud__packet--two">▪</span>
-                  <span>┆</span>
-                  <span className="living-cloud__packet living-cloud__packet--three">▪</span>
-                  <span>┆</span>
-                  <span className="living-cloud__packet living-cloud__packet--four">■</span>
-                </div>
-                <div className="living-cloud__prompt">&gt;_ <span /></div>
-              </div>
+              <div className="big-signal-stage">
+                <pre className="big-signal-figlet" aria-hidden="true">{SSM_FIGLET}</pre>
 
-              <div className="home-splash__brand">
-                <h2 id="home-title"><span>SSM</span> Commander</h2>
-                <p>A nicer way to use SSM.</p>
+                <h1 className="big-signal-wordmark" id="home-title">
+                  <span className="visually-hidden">SSM </span>
+                  Commander
+                </h1>
+
+                <div className="big-signal-rail" aria-hidden="true">
+                  <span className="big-signal-rail__end">◇</span>
+                  <span className="big-signal-rail__track">
+                    <span className="big-signal-rail__packet">▪▪</span>
+                  </span>
+                  <span className="big-signal-rail__end">◇</span>
+                </div>
+
+                <p className="big-signal-tagline">
+                  <span className="big-signal-tagline__prompt" aria-hidden="true">&gt;</span>
+                  <span className="big-signal-tagline__typed">A nicer way to use SSM.</span>
+                  <span className="big-signal-tagline__caret" aria-hidden="true" />
+                </p>
+
+                <p className="big-signal-kicker">
+                  <i aria-hidden="true">▪</i>
+                  EC2 · Shell · RDP · Tunnels
+                  <i aria-hidden="true">▪</i>
+                </p>
               </div>
             </div>
           </section>
@@ -2810,17 +2985,69 @@ export function App() {
                     <h2>Saved credentials</h2>
                     <StatusPill label={`${credentials.length}`} tone={credentials.length > 0 ? "good" : "neutral"} />
                   </div>
+                  <div className="credential-list-tools">
+                    <input
+                      aria-label="Search saved credentials"
+                      onChange={(event) => setCredentialQuery(event.target.value)}
+                      placeholder="Search credentials..."
+                      type="search"
+                      value={credentialQuery}
+                    />
+                    <select
+                      aria-label="Filter credentials by type"
+                      onChange={(event) => setCredentialKindFilter(event.target.value as CredentialKindFilter)}
+                      value={credentialKindFilter}
+                    >
+                      <option value="all">All types</option>
+                      <option value="ssh">SSH</option>
+                      <option value="rdp">RDP</option>
+                    </select>
+                  </div>
                   {credentials.length === 0 ? (
                     <p className="muted">No credentials saved yet.</p>
+                  ) : visibleCredentials.length === 0 ? (
+                    <p className="muted">No credentials match the current search and filter.</p>
                   ) : (
                     <div className="credential-list">
-                      {credentials.map((credential) => (
-                        <div className="credential-row" key={credential.id}>
+                      {visibleCredentials.map((credential) => (
+                        <div
+                          className={`credential-row ${draggedCredentialId === credential.id ? "credential-row--dragging" : ""}`.trim()}
+                          key={credential.id}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => handleCredentialDrop(event, credential.id)}
+                        >
+                          <button
+                            aria-label={`Reorder ${credential.label}. Use drag and drop or the up and down arrow keys.`}
+                            className="credential-row__drag-handle"
+                            draggable
+                            onDragEnd={() => setDraggedCredentialId("")}
+                            onDragStart={(event) => {
+                              setDraggedCredentialId(credential.id);
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/plain", credential.id);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "ArrowUp") {
+                                event.preventDefault();
+                                reorderCredentialByKeyboard(credential.id, -1);
+                              } else if (event.key === "ArrowDown") {
+                                event.preventDefault();
+                                reorderCredentialByKeyboard(credential.id, 1);
+                              }
+                            }}
+                            title="Drag to reorder"
+                            type="button"
+                          >
+                            <GripIcon />
+                          </button>
                           <div className="credential-row__summary">
                             <strong>{credential.label}</strong>
-                            <span>{credentialKindLabel(credential.kind)}{credential.username ? ` - ${credential.username}` : ""}</span>
+                            <span className="credential-row__metadata">
+                              <CredentialKindBadge kind={credential.kind} />
+                              {credential.username && <span>{credential.username}</span>}
+                            </span>
                           </div>
-                          <StatusPill label={credential.isDefault ? "default" : credential.kind} tone={credential.isDefault ? "good" : "neutral"} />
+                          <StatusPill label={credential.isDefault ? "default" : "saved"} tone={credential.isDefault ? "good" : "neutral"} />
                           <div className="credential-row__actions">
                             <button onClick={() => void editCredential(credential.id)} type="button">Edit</button>
                             <button onClick={() => void setDefaultCredential(credential.kind, credential.isDefault ? "" : credential.id)} type="button">
@@ -2861,6 +3088,16 @@ export function App() {
 
               <div className="resource-pane__tools">
                 <input onChange={(event) => setQuery(event.target.value)} placeholder="Search name, id, tag, IP, VPC..." value={query} />
+                <select
+                  aria-label="Filter instances by power state"
+                  onChange={(event) => setInstanceStateFilter(event.target.value as InstanceStateFilter)}
+                  value={instanceStateFilter}
+                >
+                  <option value="running">Running</option>
+                  <option value="stopped">Stopped</option>
+                  <option value="transitional">Starting / stopping</option>
+                  <option value="all">All states</option>
+                </select>
                 <button
                   className="button-ghost resource-sort-button"
                   onClick={() => handleInstanceColumnSort("name")}
@@ -2924,7 +3161,7 @@ export function App() {
                 {!showInitialInstancesLoader && visibleInstances.length === 0 && (
                   <div className="resource-empty">
                     <strong>No instances found</strong>
-                    <span>{query ? "Adjust the search query or refresh AWS." : "Refresh AWS to load resources."}</span>
+                    <span>{query || instanceStateFilter !== "all" ? "Adjust the search or power-state filter." : "Refresh AWS to load resources."}</span>
                   </div>
                 )}
               </div>
@@ -3017,9 +3254,9 @@ export function App() {
                     ) : (
                       <>
                         <div className="segmented-control segmented-control--connection" role="group" aria-label="Connection type">
-                          <button className={instanceConnectionKind === "rdp" ? "active" : ""} onClick={() => setInstanceConnectionKind("rdp")} type="button">RDP</button>
-                          <button className={instanceConnectionKind === "ssh" ? "active" : ""} onClick={() => setInstanceConnectionKind("ssh")} type="button">SSH</button>
-                          <button className={instanceConnectionKind === "shell" ? "active" : ""} onClick={() => setInstanceConnectionKind("shell")} type="button">Shell</button>
+                          <button className={instanceConnectionKind === "rdp" ? "active" : ""} onClick={() => changeInstanceConnectionKind("rdp")} type="button">RDP</button>
+                          <button className={instanceConnectionKind === "ssh" ? "active" : ""} onClick={() => changeInstanceConnectionKind("ssh")} type="button">SSH</button>
+                          <button className={instanceConnectionKind === "shell" ? "active" : ""} onClick={() => changeInstanceConnectionKind("shell")} type="button">Shell</button>
                         </div>
 
                         <div className="connection-actions__body">
@@ -3028,7 +3265,7 @@ export function App() {
                               <div className="connection-credential-control">
                                 <label>
                                   Saved credential
-                                  <select onChange={(event) => void applyCredentialToConnection(instanceCredentialKind, event.target.value)} value={selectedInstanceCredentialId}>
+                                  <select onChange={(event) => void selectCredentialForInstance(instanceCredentialKind, event.target.value, selectedInstance.instanceId)} value={selectedInstanceCredentialId}>
                                     <option value="">Manual entry</option>
                                     {instanceCredentialOptions.map((credential) => (
                                       <option key={credential.id} value={credential.id}>
@@ -3064,7 +3301,7 @@ export function App() {
                             )
                           )}
 
-                          {instanceConnectionKind === "ssh" && (
+                          {instanceConnectionKind === "ssh" && !selectedInstanceCredentialId && (
                             <div className="connection-actions__fields connection-actions__fields--ssh">
                               <label>
                                 SSH user
@@ -3087,7 +3324,7 @@ export function App() {
                             </div>
                           )}
 
-                          {instanceConnectionKind === "rdp" && (
+                          {instanceConnectionKind === "rdp" && !selectedInstanceCredentialId && (
                             <div className="connection-actions__fields connection-actions__fields--rdp">
                               <label>
                                 RDP username
@@ -3282,7 +3519,7 @@ export function App() {
                 aria-label="Add console tab"
                 className="console-tabs__add"
                 onClick={() => {
-                  setConsoleInstanceId(selectedInstance?.state === "running" ? selectedInstance.instanceId : "");
+                  setConsoleInstanceWithDefaults(selectedInstance?.state === "running" ? selectedInstance.instanceId : "");
                   setIsConsoleDialogOpen(true);
                 }}
                 title="Add console tab"
@@ -3304,21 +3541,21 @@ export function App() {
                   <div className="segmented-control" role="group" aria-label="Console type">
                     <button
                       className={consoleSessionKind === "shell" ? "active" : ""}
-                      onClick={() => setConsoleSessionKind("shell")}
+                      onClick={() => changeConsoleSessionKind("shell")}
                       type="button"
                     >
                       Direct SSM (Shell)
                     </button>
                     <button
                       className={consoleSessionKind === "ssh" ? "active" : ""}
-                      onClick={() => setConsoleSessionKind("ssh")}
+                      onClick={() => changeConsoleSessionKind("ssh")}
                       type="button"
                     >
                       SSH
                     </button>
                     <button
                       className={consoleSessionKind === "rdp" ? "active" : ""}
-                      onClick={() => setConsoleSessionKind("rdp")}
+                      onClick={() => changeConsoleSessionKind("rdp")}
                       type="button"
                     >
                       RDP
@@ -3328,7 +3565,7 @@ export function App() {
                     Instance ID
                     <input
                       {...technicalInputProps}
-                      onChange={(event) => setConsoleInstanceId(event.target.value)}
+                      onChange={(event) => setConsoleInstanceWithDefaults(event.target.value)}
                       placeholder="i-..."
                       value={consoleInstanceId}
                     />
@@ -3336,7 +3573,7 @@ export function App() {
                   {runningInstances.length > 0 && (
                     <label>
                       Select instance
-                      <select onChange={(event) => setConsoleInstanceId(event.target.value)} value={consoleInstanceId}>
+                      <select onChange={(event) => setConsoleInstanceWithDefaults(event.target.value)} value={consoleInstanceId}>
                         <option value="">Choose an instance</option>
                         {runningInstances.map((instance) => (
                           <option key={instance.instanceId} value={instance.instanceId}>
@@ -3346,7 +3583,48 @@ export function App() {
                       </select>
                     </label>
                   )}
-                  {consoleSessionKind === "ssh" ? (
+                  {consoleCredentialKind && (
+                    credentialStatus?.unlocked ? (
+                      <div className="connection-credential-control console-dialog__credential-control">
+                        <label>
+                          Saved credential
+                          <select
+                            onChange={(event) => void selectCredentialForInstance(consoleCredentialKind, event.target.value, consoleInstanceId)}
+                            value={selectedConsoleCredentialId}
+                          >
+                            <option value="">Manual entry</option>
+                            {consoleCredentialOptions.map((credential) => (
+                              <option key={credential.id} value={credential.id}>{credential.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          aria-label={`Create ${credentialKindLabel(consoleCredentialKind)} credential`}
+                          className="button-secondary connection-credential-control__add"
+                          onClick={() => createConnectionCredential(consoleCredentialKind)}
+                          title={`Create ${credentialKindLabel(consoleCredentialKind)} credential`}
+                          type="button"
+                        >
+                          +
+                        </button>
+                        <button
+                          aria-label="Edit selected credential"
+                          className="button-secondary connection-credential-control__edit"
+                          disabled={!selectedConsoleCredentialId}
+                          onClick={() => void editConnectionCredential(selectedConsoleCredentialId)}
+                          title="Edit selected credential"
+                          type="button"
+                        >
+                          <EditIcon />
+                        </button>
+                      </div>
+                    ) : (
+                      <button className="button-secondary" onClick={() => createConnectionCredential(consoleCredentialKind)} type="button">
+                        Create {credentialKindLabel(consoleCredentialKind)} credential
+                      </button>
+                    )
+                  )}
+                  {consoleSessionKind === "ssh" && !selectedConsoleCredentialId ? (
                     <>
                       <label>
                         SSH user
@@ -3364,7 +3642,7 @@ export function App() {
                         </div>
                       </div>
                     </>
-                  ) : consoleSessionKind === "rdp" ? (
+                  ) : consoleSessionKind === "rdp" && !selectedConsoleCredentialId ? (
                     <>
                       <label>
                         RDP username

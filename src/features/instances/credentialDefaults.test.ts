@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { selectDefaultCredentialId } from "./credentialDefaults";
+import {
+  instanceCredentialPreferenceKey,
+  rememberedInstanceCredentialId,
+  rememberInstanceCredential,
+  selectDefaultCredentialId,
+} from "./credentialDefaults";
 import type { CredentialSummary } from "../../types/models";
 
 const credentials: CredentialSummary[] = [
@@ -48,5 +53,22 @@ describe("credential defaults", () => {
       defaultSshCredentialId: "missing",
       defaultRdpCredentialId: null,
     }, "ssh")).toBe("ssh-1");
+  });
+
+  it("defaults a VM to manual entry until a credential has been remembered", () => {
+    expect(rememberedInstanceCredentialId(undefined, credentials, "dev", "us-west-2", "i-123", "ssh")).toBe("");
+  });
+
+  it("remembers credentials independently per VM and protocol", () => {
+    const remembered = rememberInstanceCredential(undefined, "dev", "us-west-2", "i-123", "ssh", "ssh-2");
+    expect(rememberedInstanceCredentialId(remembered, credentials, "dev", "us-west-2", "i-123", "ssh")).toBe("ssh-2");
+    expect(rememberedInstanceCredentialId(remembered, credentials, "dev", "us-west-2", "i-456", "ssh")).toBe("");
+    expect(rememberedInstanceCredentialId(remembered, credentials, "dev", "us-west-2", "i-123", "rdp")).toBe("");
+  });
+
+  it("ignores remembered credentials that were deleted or have the wrong protocol", () => {
+    const key = instanceCredentialPreferenceKey("dev", "us-west-2", "i-123", "ssh");
+    expect(rememberedInstanceCredentialId({ [key]: "missing" }, credentials, "dev", "us-west-2", "i-123", "ssh")).toBe("");
+    expect(rememberedInstanceCredentialId({ [key]: "rdp-1" }, credentials, "dev", "us-west-2", "i-123", "ssh")).toBe("");
   });
 });

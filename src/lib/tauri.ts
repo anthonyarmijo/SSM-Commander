@@ -306,6 +306,7 @@ async function browserPreviewValue<T>(command: string, args?: Record<string, unk
       defaultSshCredentialId: preview.demoMode ? "preview-ssh" : null,
       defaultRdpCredentialId: preview.demoMode ? "preview-rdp" : null,
     },
+    reorder_credentials: preview.demoMode ? [] : [],
     list_profiles: [
       { name: "demo-profile", source: "unknown", defaultRegion: "us-west-2" },
       { name: "sample-lab", source: "unknown", defaultRegion: "us-east-1" },

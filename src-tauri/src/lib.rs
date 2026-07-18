@@ -74,6 +74,7 @@ pub fn run() {
             commands::upsert_credential,
             commands::delete_credential,
             commands::set_default_credential,
+            commands::reorder_credentials,
             commands::discover_instances,
             commands::get_ssm_readiness,
             commands::start_instances,

@@ -294,6 +294,18 @@ pub fn set_default_credential(
 }
 
 #[tauri::command]
+pub fn reorder_credentials(
+    state: State<'_, AppState>,
+    credential_ids: Vec<String>,
+) -> Result<Vec<CredentialSummary>, String> {
+    state
+        .credentials
+        .lock()
+        .map_err(|_| "Credential store is unavailable".to_string())?
+        .reorder(credential_ids)
+}
+
+#[tauri::command]
 pub async fn discover_instances(
     state: State<'_, AppState>,
     profile: String,
